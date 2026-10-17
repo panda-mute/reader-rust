@@ -111,16 +111,21 @@ jobs:
       - name: 配置 Rust 依赖与构建缓存
         uses: Swatinem/rust-cache@v2
 
-      - name: 安装 cross 交叉编译工具
+      - name: 配置 musl 编译环境 (x86_64 & aarch64)
         run: |
-          curl -sSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /tmp
-          sudo mv /tmp/cross /usr/local/bin/cross
-          chmod +x /usr/local/bin/cross
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          sudo ln -sf /usr/bin/musl-gcc /usr/local/bin/x86_64-linux-musl-gcc
+          curl -sSL https://github.com/nushell/integrations/releases/download/build-tools/aarch64-linux-musl-cross.tgz | tar -xz -C /tmp
+          echo "/tmp/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
       - name: 编译 Rust 二进制 (x86_64 & aarch64)
+        env:
+          CC_x86_64_unknown_linux_musl: /usr/local/bin/x86_64-linux-musl-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-linux-musl-ar
         run: |
-          cross build --release --target x86_64-unknown-linux-musl
-          cross build --release --target aarch64-unknown-linux-musl
+          cargo build --release --target x86_64-unknown-linux-musl
+          cargo build --release --target aarch64-unknown-linux-musl
           mkdir -p target-bin/amd64 target-bin/arm64
           cp target/x86_64-unknown-linux-musl/release/reader-rust target-bin/amd64/reader-rust
           cp target/aarch64-unknown-linux-musl/release/reader-rust target-bin/arm64/reader-rust

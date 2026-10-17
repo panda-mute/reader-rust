@@ -93,7 +93,7 @@ jobs:
       - name: 设置 Node.js 环境
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -111,23 +111,16 @@ jobs:
       - name: 配置 Rust 依赖与构建缓存
         uses: Swatinem/rust-cache@v2
 
-      - name: 安装 musl 交叉编译工具链
+      - name: 安装 cross 交叉编译工具
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          sudo mkdir -p /opt/musl-cross
-          curl --retry 3 --retry-delay 2 -sSL https://musl.cc/x86_64-linux-musl-cross.tgz | sudo tar -xz -C /opt/musl-cross
-          curl --retry 3 --retry-delay 2 -sSL https://musl.cc/aarch64-linux-musl-cross.tgz | sudo tar -xz -C /opt/musl-cross
-          echo "/opt/musl-cross/x86_64-linux-musl-cross/bin" >> $GITHUB_PATH
-          echo "/opt/musl-cross/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          curl -sSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /tmp
+          sudo mv /tmp/cross /usr/local/bin/cross
+          chmod +x /usr/local/bin/cross
 
       - name: 编译 Rust 二进制 (x86_64 & aarch64)
-        env:
-          CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
-          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
-          AR_aarch64_unknown_linux_musl: aarch64-linux-musl-ar
         run: |
-          cargo build --release --target x86_64-unknown-linux-musl
-          cargo build --release --target aarch64-unknown-linux-musl
+          cross build --release --target x86_64-unknown-linux-musl
+          cross build --release --target aarch64-unknown-linux-musl
           mkdir -p target-bin/amd64 target-bin/arm64
           cp target/x86_64-unknown-linux-musl/release/reader-rust target-bin/amd64/reader-rust
           cp target/aarch64-unknown-linux-musl/release/reader-rust target-bin/arm64/reader-rust

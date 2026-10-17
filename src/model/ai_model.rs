@@ -140,7 +140,7 @@ impl AiModelConfig {
                 voice.to_string()
             };
             let format = self.speech.response_format.trim();
-            self.speech.response_format = if format.is_empty() || format == "mp3" {
+            self.speech.response_format = if format.is_empty() {
                 "wav".to_string()
             } else {
                 format.to_string()
@@ -220,6 +220,25 @@ impl AiModelConfig {
 
 fn normalize_url(value: String) -> String {
     value.trim().trim_end_matches('/').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mimo_preserves_selected_audio_format() {
+        for format in ["wav", "mp3"] {
+            let mut config = AiModelConfig::default();
+            config.speech.provider = "mimo".to_string();
+            config.speech.response_format = format.to_string();
+            let saved = config.sanitized();
+            assert_eq!(saved.speech.response_format, format);
+            let reloaded: AiModelConfig =
+                serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            assert_eq!(reloaded.sanitized().speech.response_format, format);
+        }
+    }
 }
 
 fn default_if_empty(value: String, default_value: &str) -> String {

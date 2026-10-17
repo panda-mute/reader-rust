@@ -103,6 +103,8 @@
       @openai-voice-change="changeOpenAIVoice"
       @mimo-voice-change="changeMimoVoice"
       @provider-change="changeSpeechProvider"
+      @source-change="changeSpeechSource"
+      @settings="closeTTSPanel(); store.openPanel('settings')"
       @rate-change="adjustSpeechRate"
       @pitch-change="adjustSpeechPitch"
       @timer-change="setSpeechTimer"
@@ -1572,6 +1574,23 @@ async function changeSpeechProvider(provider: 'system' | 'server' | 'openai' | '
   if (wasSpeaking) {
     window.setTimeout(() => startSpeech(), 120)
   }
+}
+
+async function changeSpeechSource(source: 'browser' | 'server') {
+  if (source === 'server') {
+    const result = await store.loadServerSpeechConfig()
+    if (!result?.canUseServerModel || !result.config.speech.enabled) {
+      appStore.showToast('后端语音未启用或当前账号没有使用权限', 'warning')
+      return
+    }
+    cancelSpeechTransition()
+    store.stopTTS(false)
+    store.setSpeechProvider(store.serverSpeechProvider)
+  }
+  cancelSpeechTransition()
+  store.stopTTS(false)
+  if (store.speechConfig.provider === 'mimo') store.setMimoSpeechSource(source)
+  else store.setOpenAISpeechSource(source)
 }
 
 function toggleSpeechFromPanel() {

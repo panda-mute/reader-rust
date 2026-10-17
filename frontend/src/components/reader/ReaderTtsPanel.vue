@@ -18,11 +18,13 @@
       </div>
       <div class="tts-engine-switch" role="group" aria-label="朗读引擎">
         <button :class="{ active: provider === 'system' }" @click="$emit('provider-change', 'system')">系统语音</button>
-        <button :class="{ active: provider === 'server' }" @click="$emit('provider-change', 'server')">
-          {{ serverProvider ? `后端配置 (${serverProvider === 'mimo' ? '小米 MiMo' : 'OpenAI'})` : '后端配置' }}
-        </button>
         <button :class="{ active: provider === 'mimo' }" @click="$emit('provider-change', 'mimo')">小米 MiMo</button>
         <button :class="{ active: provider === 'openai' }" @click="$emit('provider-change', 'openai')">OpenAI</button>
+      </div>
+      <div v-if="provider === 'mimo' || provider === 'openai'" class="tts-engine-switch" role="group" aria-label="模型来源">
+        <button :class="{ active: (provider === 'mimo' ? mimoSource : openaiSource) === 'browser' }" @click="$emit('source-change', 'browser')">自己配置</button>
+        <button :class="{ active: (provider === 'mimo' ? mimoSource : openaiSource) === 'server' }" @click="$emit('source-change', 'server')">后端配置</button>
+        <button @click="$emit('settings')">语音设置</button>
       </div>
       <div class="tts-btns">
         <button @click="$emit('prev')">上一段</button>
@@ -144,6 +146,8 @@ defineEmits<{
   'openai-voice-change': [value: string]
   'mimo-voice-change': [value: string]
   'provider-change': [value: 'system' | 'server' | 'openai' | 'mimo']
+  'source-change': [value: 'browser' | 'server']
+  settings: []
   'rate-change': [delta: number]
   'pitch-change': [delta: number]
   'timer-change': [minutes: number]
@@ -220,7 +224,7 @@ defineEmits<{
 
 .tts-engine-switch {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   padding: 4px;
   border-radius: 14px;

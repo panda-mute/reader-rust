@@ -549,9 +549,11 @@ export const useReaderStore = defineStore('reader', () => {
   const serverSpeechProvider = computed<'openai' | 'mimo'>(() =>
     isMimoSpeechConfig(serverSpeechConfig.value) ? 'mimo' : 'openai',
   )
+  const usesServerSpeech = computed(() => speechConfig.provider === 'server'
+    || (speechConfig.provider === 'mimo' && speechConfig.mimoSource === 'server')
+    || (speechConfig.provider === 'openai' && speechConfig.openaiSource === 'server'))
   const isCurrentSpeechMimo = computed(() => {
-    if (speechConfig.provider === 'mimo') return true
-    if (speechConfig.provider !== 'server') return false
+    if (!usesServerSpeech.value) return speechConfig.provider === 'mimo'
     return serverSpeechProvider.value === 'mimo'
   })
   const isCurrentSpeechNetwork = computed(() =>
@@ -640,7 +642,14 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function loadServerSpeechConfig() {
-    return aiBookStore.loadServerModelConfig({ force: true })
+    const result = await aiBookStore.loadServerModelConfig({ force: true })
+    if (result && speechConfig.provider === 'server') {
+      const provider = serverSpeechProvider.value
+      if (provider === 'mimo') setMimoSpeechSource('server')
+      else setOpenAISpeechSource('server')
+      setSpeechProvider(provider)
+    }
+    return result
   }
 
   function setOpenAISpeechBaseUrl(url: string) {
@@ -753,7 +762,7 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   function buildOpenAIAudioCacheKey(rawText: string) {
-    if (speechConfig.provider === 'server') {
+    if (usesServerSpeech.value) {
       const server = serverSpeechConfig.value
       return [
         'server',
@@ -795,7 +804,7 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function fetchOpenAIAudioBlob(rawText: string, signal?: AbortSignal) {
-    if (speechConfig.provider === 'server') {
+    if (usesServerSpeech.value) {
       const server = serverSpeechConfig.value
       const speechText = rawText.slice(0, 4096)
       if (!server) {
@@ -1145,10 +1154,14 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function startOpenAITTS(rawText: string, options: TTSOptions, sessionId: number) {
-    const isServer = speechConfig.provider === 'server'
+    const isServer = usesServerSpeech.value
+    if (isServer) {
+      await aiBookStore.loadServerModelConfig()
+      if (!isCurrentTTSSession(sessionId)) return
+    }
     const isMimo = isCurrentSpeechMimo.value
     const isConfigured = isServer
-      ? Boolean(serverSpeechConfig.value?.enabled)
+      ? true
       : isMimo ? mimoSpeechConfigured.value : openAISpeechConfigured.value
     const providerLabel = isMimo ? '小米 MiMo' : 'OpenAI Speech'
 

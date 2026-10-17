@@ -213,9 +213,8 @@
         <label>朗读引擎</label>
         <div class="btn-group">
           <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'system' }" @click="store.setSpeechProvider('system')">系统语音</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'server' }" @click="selectServerSpeech">后端配置</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'mimo' }" @click="store.setSpeechProvider('mimo')">小米 MiMo (自定义)</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'openai' }" @click="store.setSpeechProvider('openai')">OpenAI (自定义)</button>
+          <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'openai' }" @click="store.setSpeechProvider('openai')">OpenAI Speech</button>
+          <button class="opt-btn" :class="{ active: store.speechConfig.provider === 'mimo' }" @click="store.setSpeechProvider('mimo')">小米 MiMo</button>
         </div>
       </div>
 
@@ -229,46 +228,6 @@
         </select>
       </div>
 
-      <template v-else-if="store.speechConfig.provider === 'server'">
-        <div class="server-speech-note">
-          <template v-if="canUseServerModel">
-            <template v-if="store.serverSpeechConfig">
-              使用管理员配置的 {{ store.serverSpeechProvider === 'mimo' ? '小米 MiMo' : 'OpenAI Speech' }}：
-              {{ store.serverSpeechConfig.model }} / {{ store.serverSpeechConfig.voice }}
-              <template v-if="store.serverSpeechProvider === 'mimo' && store.serverSpeechConfig.prompt">
-                · {{ store.serverSpeechConfig.prompt }}
-              </template>
-            </template>
-            <template v-else>正在读取后端语音配置…</template>
-          </template>
-          <template v-else>
-            当前账号没有使用后端模型配置的权限，请让管理员在用户管理中开启“AI 模型”，或改用下方自定义配置。
-          </template>
-        </div>
-        <div class="setting-hint">
-          后端配置会跟随管理员当前启用的语音引擎自动选择 OpenAI Speech 或小米 MiMo。
-        </div>
-        <div class="setting-row setting-row-top">
-          <label>请求模式</label>
-          <div class="btn-group">
-            <button
-              class="opt-btn"
-              :class="{ active: (store.serverSpeechProvider === 'mimo' ? store.speechConfig.mimoRequestMode : store.speechConfig.openaiRequestMode) === 'chunked' }"
-              @click="store.setServerSpeechRequestMode('chunked')"
-            >
-              少字多请求
-            </button>
-            <button
-              class="opt-btn"
-              :class="{ active: (store.serverSpeechProvider === 'mimo' ? store.speechConfig.mimoRequestMode : store.speechConfig.openaiRequestMode) === 'merged' }"
-              @click="store.setServerSpeechRequestMode('merged')"
-            >
-              多字少请求
-            </button>
-          </div>
-        </div>
-      </template>
-
       <template v-else-if="store.speechConfig.provider === 'openai'">
         <div class="setting-row">
           <label>模型来源</label>
@@ -280,7 +239,14 @@
             >
               自己配置
             </button>
-            <button class="opt-btn" :class="{ active: store.speechConfig.openaiSource === 'server' }" @click="selectOpenAISpeechSource('server')">后端配置</button>
+            <button
+              class="opt-btn"
+              :class="{ active: store.speechConfig.openaiSource === 'server' }"
+              :disabled="serverModelLoaded && !canUseServerModel"
+              @click="selectOpenAISpeechSource('server')"
+            >
+              后端配置
+            </button>
           </div>
         </div>
 
@@ -393,7 +359,14 @@
             >
               自己配置
             </button>
-            <button class="opt-btn" :class="{ active: store.speechConfig.mimoSource === 'server' }" @click="selectMimoSpeechSource('server')">后端配置</button>
+            <button
+              class="opt-btn"
+              :class="{ active: store.speechConfig.mimoSource === 'server' }"
+              :disabled="serverModelLoaded && !canUseServerModel"
+              @click="selectMimoSpeechSource('server')"
+            >
+              后端配置
+            </button>
           </div>
         </div>
 
@@ -574,7 +547,7 @@ function stepFloat(key: 'lineHeight' | 'paragraphSpacing', delta: number, min: n
 }
 
 function adjustSpeechRate(delta: number) {
-  const val = Math.max(0.25, Math.min(4, parseFloat((store.speechConfig.speechRate + delta).toFixed(1))))
+  const val = Math.max(0.5, Math.min(3, parseFloat((store.speechConfig.speechRate + delta).toFixed(1))))
   store.setSpeechRate(val)
 }
 
@@ -602,23 +575,9 @@ async function selectOpenAISpeechSource(source: 'browser' | 'server') {
     appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
     return
   }
-  store.setOpenAISpeechSource('server')
-}
-
-async function selectServerSpeech() {
-  if (!serverModelLoaded.value) {
-    await aiBookStore.loadServerModelConfig({ force: true })
-    serverModelLoaded.value = true
-  }
-  if (!canUseServerModel.value) {
-    appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
-    return
-  }
-  if (!store.serverSpeechConfig?.enabled) {
-    appStore.showToast('后端语音模型未启用', 'warning')
-    return
-  }
-  store.setSpeechProvider('server')
+  store.setSpeechProvider(store.serverSpeechProvider)
+  if (store.serverSpeechProvider === 'mimo') store.setMimoSpeechSource('server')
+  else store.setOpenAISpeechSource('server')
 }
 
 async function selectMimoSpeechSource(source: 'browser' | 'server') {
@@ -635,7 +594,9 @@ async function selectMimoSpeechSource(source: 'browser' | 'server') {
     appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
     return
   }
-  store.setMimoSpeechSource('server')
+  store.setSpeechProvider(store.serverSpeechProvider)
+  if (store.serverSpeechProvider === 'mimo') store.setMimoSpeechSource('server')
+  else store.setOpenAISpeechSource('server')
 }
 
 onMounted(async () => {
@@ -647,9 +608,6 @@ onMounted(async () => {
   }
   if (store.speechConfig.mimoSource === 'server' && !canUseServerModel.value) {
     store.setMimoSpeechSource('browser')
-  }
-  if (store.speechConfig.provider === 'server' && (!canUseServerModel.value || !store.serverSpeechConfig?.enabled)) {
-    store.setSpeechProvider('system')
   }
 })
 </script>

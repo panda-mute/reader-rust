@@ -5,6 +5,7 @@ import { useAiBookStore } from './aiBook'
 import { useReaderStore } from './reader'
 import { getBookContent } from '../api/bookshelf'
 import { getBrowserCachedChapter } from '../utils/browserCache'
+import { requestMimoSpeechAudio } from '../utils/mimoSpeech'
 
 vi.mock('../api/bookshelf', () => ({
   getChapterList: vi.fn(),
@@ -102,9 +103,15 @@ describe('reader local txt chapters', () => {
 
     readerStore.setMimoSpeechVoice('冰糖')
     expect(readerStore.speechConfig.mimoVoice).toBe('冰糖')
+    for (const format of ['mp3', 'wav'] as const) {
+      readerStore.setMimoSpeechFormat(format)
+      expect(JSON.parse(localStorage.getItem('reader-speechConfig')!).mimoFormat).toBe(format)
+      setActivePinia(createPinia())
+      expect(useReaderStore().speechConfig.mimoFormat).toBe(format)
+    }
   })
 
-  it('identifies the active server speech engine as MiMo', () => {
+  it('uses server MiMo settings instead of browser voice defaults', async () => {
     const aiStore = useAiBookStore()
     aiStore.serverModelConfig = {
       config: {
@@ -126,9 +133,15 @@ describe('reader local txt chapters', () => {
       isAdmin: false,
     }
     const readerStore = useReaderStore()
-    readerStore.setSpeechProvider('server')
+    readerStore.setSpeechProvider('mimo')
+    readerStore.setMimoSpeechSource('server')
 
-    expect(readerStore.speechProviderLabel).toBe('后端配置 · 小米 MiMo')
+    expect(readerStore.speechProviderLabel).toBe('小米 MiMo')
     expect(readerStore.isCurrentSpeechMimo).toBe(true)
+    vi.mocked(requestMimoSpeechAudio).mockResolvedValue(new Blob(['audio']))
+    await readerStore.preloadOpenAITTS('测试正文')
+    expect(requestMimoSpeechAudio).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'server', model: 'mimo-v2.5-tts', voice: '冰糖', prompt: '温柔',
+    }))
   })
 })

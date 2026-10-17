@@ -16,6 +16,14 @@
           </svg>
         </button>
       </div>
+      <div class="tts-engine-switch" role="group" aria-label="朗读引擎">
+        <button :class="{ active: provider === 'system' }" @click="$emit('provider-change', 'system')">系统语音</button>
+        <button :class="{ active: provider === 'server' }" @click="$emit('provider-change', 'server')">
+          {{ serverProvider ? `后端配置 (${serverProvider === 'mimo' ? '小米 MiMo' : 'OpenAI'})` : '后端配置' }}
+        </button>
+        <button :class="{ active: provider === 'mimo' }" @click="$emit('provider-change', 'mimo')">小米 MiMo</button>
+        <button :class="{ active: provider === 'openai' }" @click="$emit('provider-change', 'openai')">OpenAI</button>
+      </div>
       <div class="tts-btns">
         <button @click="$emit('prev')">上一段</button>
         <button :disabled="isLoading" @click="$emit('toggle-play')">{{ isLoading ? '加载中' : (!isSpeaking ? '开始' : (isPaused ? '恢复' : '暂停')) }}</button>
@@ -28,6 +36,14 @@
           {{ voice.name }} ({{ voice.lang }})
         </option>
       </select>
+      <template v-else-if="provider === 'server'">
+        <div class="tts-source-note">
+          <template v-if="serverSpeechConfig">
+            {{ serverProvider === 'mimo' ? '小米 MiMo' : 'OpenAI Speech' }} 使用后端配置 · {{ serverSpeechConfig.model }} / {{ serverSpeechConfig.voice }}
+          </template>
+          <template v-else>正在读取后端语音配置…</template>
+        </div>
+      </template>
       <template v-else-if="provider === 'openai'">
         <div v-if="openaiSource === 'server'" class="tts-source-note">
           OpenAI Speech 使用后端配置
@@ -93,8 +109,13 @@ defineProps<{
   show: boolean
   theme: ThemePreset | { popup: string; fontColor: string }
   chapterTitle?: string
-  provider: 'system' | 'openai' | 'mimo'
+  provider: 'system' | 'server' | 'openai' | 'mimo'
   providerLabel: string
+  serverProvider?: 'openai' | 'mimo'
+  serverSpeechConfig?: {
+    model: string
+    voice: string
+  }
   isSpeaking: boolean
   isLoading: boolean
   isPaused: boolean
@@ -122,6 +143,7 @@ defineEmits<{
   'voice-change': [value: string]
   'openai-voice-change': [value: string]
   'mimo-voice-change': [value: string]
+  'provider-change': [value: 'system' | 'server' | 'openai' | 'mimo']
   'rate-change': [delta: number]
   'pitch-change': [delta: number]
   'timer-change': [minutes: number]
@@ -194,6 +216,36 @@ defineEmits<{
   flex-wrap: wrap;
   gap: 12px;
   justify-content: center;
+}
+
+.tts-engine-switch {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.tts-engine-switch button {
+  min-width: 0;
+  padding: 9px 6px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tts-engine-switch button.active {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
 }
 
 .tts-btns button {
@@ -309,6 +361,10 @@ defineEmits<{
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  .tts-engine-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tts-btns button {

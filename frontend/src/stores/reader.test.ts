@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAppStore } from './app'
+import { useAiBookStore } from './aiBook'
 import { useReaderStore } from './reader'
 import { getBookContent } from '../api/bookshelf'
 import { getBrowserCachedChapter } from '../utils/browserCache'
@@ -101,5 +102,33 @@ describe('reader local txt chapters', () => {
 
     readerStore.setMimoSpeechVoice('冰糖')
     expect(readerStore.speechConfig.mimoVoice).toBe('冰糖')
+  })
+
+  it('identifies the active server speech engine as MiMo', () => {
+    const aiStore = useAiBookStore()
+    aiStore.serverModelConfig = {
+      config: {
+        text: { enabled: false, baseUrl: '', apiKey: '', model: '', useFullUrl: false },
+        image: { enabled: false, baseUrl: '', apiKey: '', model: '', useFullUrl: false, imageSize: '' },
+        speech: {
+          enabled: true,
+          provider: 'mimo',
+          baseUrl: 'https://api.xiaomimimo.com',
+          apiKey: '',
+          model: 'mimo-v2.5-tts',
+          useFullUrl: false,
+          voice: '冰糖',
+          responseFormat: 'wav',
+          prompt: '温柔',
+        },
+      },
+      canUseServerModel: true,
+      isAdmin: false,
+    }
+    const readerStore = useReaderStore()
+    readerStore.setSpeechProvider('server')
+
+    expect(readerStore.speechProviderLabel).toBe('后端配置 · 小米 MiMo')
+    expect(readerStore.isCurrentSpeechMimo).toBe(true)
   })
 })

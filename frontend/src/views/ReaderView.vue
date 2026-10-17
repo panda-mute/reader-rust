@@ -76,6 +76,8 @@
       :chapter-title="store.currentChapter?.title"
       :provider="store.speechConfig.provider"
       :provider-label="store.speechProviderLabel"
+      :server-provider="store.serverSpeechProvider"
+      :server-speech-config="store.serverSpeechConfig"
       :is-speaking="store.isSpeaking"
       :is-loading="store.isSpeechLoading"
       :is-paused="store.isPaused"
@@ -100,6 +102,7 @@
       @voice-change="changeVoice"
       @openai-voice-change="changeOpenAIVoice"
       @mimo-voice-change="changeMimoVoice"
+      @provider-change="changeSpeechProvider"
       @rate-change="adjustSpeechRate"
       @pitch-change="adjustSpeechPitch"
       @timer-change="setSpeechTimer"
@@ -1546,6 +1549,31 @@ function closeTTSPanel() {
   ttsPanelDismissed.value = true
 }
 
+async function changeSpeechProvider(provider: 'system' | 'server' | 'openai' | 'mimo') {
+  if (provider === 'server') {
+    const serverConfig = await store.loadServerSpeechConfig()
+    if (!serverConfig?.canUseServerModel) {
+      appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
+      return
+    }
+    if (!serverConfig.config.speech.enabled) {
+      appStore.showToast('后端语音模型未启用', 'warning')
+      return
+    }
+  }
+  const wasSpeaking = store.isSpeaking || store.isSpeechLoading
+  if (wasSpeaking) {
+    cancelSpeechTransition()
+    store.stopTTS(false)
+  }
+  store.setSpeechProvider(provider)
+  ttsPanelDismissed.value = false
+  showTTSPanel.value = true
+  if (wasSpeaking) {
+    window.setTimeout(() => startSpeech(), 120)
+  }
+}
+
 function toggleSpeechFromPanel() {
   ttsPanelDismissed.value = false
   showTTSPanel.value = true
@@ -1569,7 +1597,9 @@ watch(() => store.isAutoScrolling, (val) => {
 })
 
 watch(showTTSPanel, (visible) => {
-  if (!visible) return
+  if (visible) {
+    void store.loadServerSpeechConfig()
+  }
 })
 
 function changeVoice(name: string) {
@@ -1602,7 +1632,7 @@ function changeMimoVoice(voiceId: string) {
 }
 
 function adjustSpeechRate(delta: number) {
-  const next = Math.max(0.5, Math.min(3, parseFloat((store.speechConfig.speechRate + delta).toFixed(1))))
+  const next = Math.max(0.25, Math.min(4, parseFloat((store.speechConfig.speechRate + delta).toFixed(1))))
   store.setSpeechRate(next)
   ttsPanelDismissed.value = false
   showTTSPanel.value = true
@@ -1693,6 +1723,7 @@ onMounted(async () => {
   await Promise.all([
     store.fetchBookmarks(),
     store.fetchReplaceRules(),
+    store.loadServerSpeechConfig(),
   ])
   scheduleRefreshOfflineCacheState()
   updateHorizontalMetrics()

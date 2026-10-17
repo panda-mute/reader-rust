@@ -492,10 +492,10 @@
                   </label>
                   <label class="field">
                     <span>音色</span>
-                    <input
-                      v-model="serverConfigDraft.speech.voice"
-                      :placeholder="serverConfigDraft.speech.provider === 'mimo' ? 'mimo_default' : 'alloy'"
-                    />
+                    <select v-if="serverConfigDraft.speech.provider === 'mimo'" v-model="serverConfigDraft.speech.voice">
+                      <option v-for="voice in MIMO_PRESET_VOICES" :key="voice.value" :value="voice.value">{{ voice.label }}</option>
+                    </select>
+                    <input v-else v-model="serverConfigDraft.speech.voice" placeholder="alloy" />
                   </label>
                   <label class="field">
                     <span>格式</span>
@@ -555,6 +555,7 @@ import type {
 import { buildAiBookRelationshipGraph, layoutAiBookRelationshipGraph } from '../utils/aiBookGraph'
 import { buildAiBookLocationRows, groupAiBookWorldview } from '../utils/aiBookPresentation'
 import { collapseWhitespace, summarizeDisplayError } from '../utils/httpError'
+import { MIMO_PRESET_VOICES } from '../utils/mimoSpeech'
 
 type AiTab = 'overview' | 'characters' | 'relationships' | 'map' | 'settings'
 

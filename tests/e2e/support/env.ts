@@ -4,6 +4,8 @@ export type E2EConfig = {
   searchKeyword?: string
   expectedBookName?: string
   sourceImportFile?: string
+  mimoBookName?: string
+  accessToken?: string
 }
 
 export function readE2EConfig(): E2EConfig {
@@ -13,6 +15,8 @@ export function readE2EConfig(): E2EConfig {
     searchKeyword: process.env.E2E_SEARCH_KEYWORD,
     expectedBookName: process.env.E2E_EXPECTED_BOOK_NAME,
     sourceImportFile: process.env.E2E_SOURCE_IMPORT_FILE,
+    mimoBookName: process.env.E2E_MIMO_BOOK_NAME,
+    accessToken: process.env.E2E_ACCESS_TOKEN,
   }
 }
 

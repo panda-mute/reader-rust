@@ -221,10 +221,15 @@ export function useReaderAutoPlayback(
   }
 
   function isNetworkSpeech() {
-    return store.speechConfig.provider === 'openai' || store.speechConfig.provider === 'mimo'
+    return store.isCurrentSpeechNetwork
   }
 
   function isMergedRequestMode() {
+    if (store.speechConfig.provider === 'server') {
+      return store.serverSpeechProvider === 'mimo'
+        ? store.speechConfig.mimoRequestMode === 'merged'
+        : store.speechConfig.openaiRequestMode === 'merged'
+    }
     if (store.speechConfig.provider === 'mimo') {
       return store.speechConfig.mimoRequestMode === 'merged'
     }

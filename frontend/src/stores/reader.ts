@@ -140,7 +140,7 @@ interface PreloadedOpenAIAudio {
 
 const OPENAI_AUDIO_PRELOAD_LIMIT = 8
 
-export type SpeechProvider = 'system' | 'openai' | 'mimo'
+export type SpeechProvider = 'system' | 'server' | 'openai' | 'mimo'
 export type OpenAISpeechSource = 'browser' | 'server'
 export type OpenAISpeechFormat = 'mp3' | 'wav' | 'opus' | 'flac' | 'pcm'
 export type OpenAISpeechRequestMode = 'chunked' | 'merged'
@@ -198,6 +198,15 @@ function loadSpeechConfig(): SpeechConfig {
     if (saved) return { ...defaultSpeechConfig, ...JSON.parse(saved) }
   } catch { /* ignore */ }
   return { ...defaultSpeechConfig }
+}
+
+function isMimoSpeechConfig(config?: {
+  provider?: string
+  model?: string
+}) {
+  if (!config) return false
+  return String(config.provider || '').trim().toLowerCase() === 'mimo'
+    || String(config.model || '').toLowerCase().includes('mimo')
 }
 
 function isSafariSpeechFallbackMode() {
@@ -536,9 +545,26 @@ export const useReaderStore = defineStore('reader', () => {
     if (speechConfig.mimoSource === 'server') return true
     return !!speechConfig.mimoBaseUrl.trim()
   })
+  const serverSpeechConfig = computed(() => aiBookStore.serverModelConfig?.config.speech)
+  const serverSpeechProvider = computed<'openai' | 'mimo'>(() =>
+    isMimoSpeechConfig(serverSpeechConfig.value) ? 'mimo' : 'openai',
+  )
+  const isCurrentSpeechMimo = computed(() => {
+    if (speechConfig.provider === 'mimo') return true
+    if (speechConfig.provider !== 'server') return false
+    return serverSpeechProvider.value === 'mimo'
+  })
+  const isCurrentSpeechNetwork = computed(() =>
+    speechConfig.provider === 'openai'
+      || speechConfig.provider === 'mimo'
+      || speechConfig.provider === 'server',
+  )
   const speechProviderLabel = computed(() => {
     if (speechConfig.provider === 'openai') return 'OpenAI Speech'
     if (speechConfig.provider === 'mimo') return '小米 MiMo'
+    if (speechConfig.provider === 'server') {
+      return serverSpeechProvider.value === 'mimo' ? '后端配置 · 小米 MiMo' : '后端配置 · OpenAI Speech'
+    }
     return '系统语音'
   })
   const speechStopAt = ref(0)
@@ -611,6 +637,10 @@ export const useReaderStore = defineStore('reader', () => {
     speechConfig.provider = provider
     clearPreloadedOpenAIAudio()
     saveSpeechConfig()
+  }
+
+  async function loadServerSpeechConfig() {
+    return aiBookStore.loadServerModelConfig({ force: true })
   }
 
   function setOpenAISpeechBaseUrl(url: string) {
@@ -714,7 +744,29 @@ export const useReaderStore = defineStore('reader', () => {
     saveSpeechConfig()
   }
 
+  function setServerSpeechRequestMode(mode: OpenAISpeechRequestMode) {
+    if (serverSpeechProvider.value === 'mimo') {
+      setMimoSpeechRequestMode(mode)
+    } else {
+      setOpenAISpeechRequestMode(mode)
+    }
+  }
+
   function buildOpenAIAudioCacheKey(rawText: string) {
+    if (speechConfig.provider === 'server') {
+      const server = serverSpeechConfig.value
+      return [
+        'server',
+        server?.provider || '',
+        server?.baseUrl || '',
+        server?.model || '',
+        server?.voice || '',
+        server?.responseFormat || '',
+        server?.prompt || '',
+        speechConfig.speechRate.toFixed(1),
+        rawText,
+      ].join('::')
+    }
     if (speechConfig.provider === 'mimo') {
       return [
         'mimo',
@@ -743,6 +795,36 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function fetchOpenAIAudioBlob(rawText: string, signal?: AbortSignal) {
+    if (speechConfig.provider === 'server') {
+      const server = serverSpeechConfig.value
+      const speechText = rawText.slice(0, 4096)
+      if (!server) {
+        throw new Error('后端语音配置未加载')
+      }
+      if (serverSpeechProvider.value === 'mimo') {
+        return requestMimoSpeechAudio({
+          source: 'server',
+          baseUrl: server.baseUrl,
+          input: speechText,
+          model: server.model,
+          voice: server.voice,
+          format: server.responseFormat === 'mp3' ? 'mp3' : 'wav',
+          prompt: server.prompt,
+          speed: speechConfig.speechRate,
+          signal,
+        })
+      }
+      return requestOpenAISpeechAudio({
+        source: 'server',
+        baseUrl: server.baseUrl,
+        input: speechText,
+        model: server.model,
+        voice: server.voice,
+        format: server.responseFormat,
+        speed: speechConfig.speechRate,
+        signal,
+      })
+    }
     if (speechConfig.provider === 'mimo') {
       return requestMimoSpeechAudio({
         source: speechConfig.mimoSource,
@@ -794,8 +876,10 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function preloadOpenAITTS(rawText?: string | string[] | null) {
-    const isNetworkSpeech = speechConfig.provider === 'openai' || speechConfig.provider === 'mimo'
-    const isConfigured = speechConfig.provider === 'mimo' ? mimoSpeechConfigured.value : openAISpeechConfigured.value
+    const isNetworkSpeech = isCurrentSpeechNetwork.value
+    const isConfigured = speechConfig.provider === 'server'
+      ? Boolean(serverSpeechConfig.value?.enabled)
+      : speechConfig.provider === 'mimo' ? mimoSpeechConfigured.value : openAISpeechConfigured.value
     if (!isNetworkSpeech || !isConfigured) return
     const texts = Array.isArray(rawText) ? rawText : [rawText || '']
     const normalizedTexts = texts.map((item) => item.trim()).filter(Boolean)
@@ -1061,8 +1145,11 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   async function startOpenAITTS(rawText: string, options: TTSOptions, sessionId: number) {
-    const isMimo = speechConfig.provider === 'mimo'
-    const isConfigured = isMimo ? mimoSpeechConfigured.value : openAISpeechConfigured.value
+    const isServer = speechConfig.provider === 'server'
+    const isMimo = isCurrentSpeechMimo.value
+    const isConfigured = isServer
+      ? Boolean(serverSpeechConfig.value?.enabled)
+      : isMimo ? mimoSpeechConfigured.value : openAISpeechConfigured.value
     const providerLabel = isMimo ? '小米 MiMo' : 'OpenAI Speech'
 
     if (!isConfigured) {
@@ -1071,7 +1158,7 @@ export const useReaderStore = defineStore('reader', () => {
       options.onError?.(error)
       return
     }
-    const source = isMimo ? speechConfig.mimoSource : speechConfig.openaiSource
+    const source = isServer ? 'server' : isMimo ? speechConfig.mimoSource : speechConfig.openaiSource
     if (source === 'server') {
       const serverConfig = await aiBookStore.loadServerModelConfig()
       if (!serverConfig?.canUseServerModel) {
@@ -1090,10 +1177,14 @@ export const useReaderStore = defineStore('reader', () => {
     }
 
     isSpeechLoading.value = true
-    logTTS(`${isMimo ? 'mimo' : 'openai'} speak queued`, {
+    logTTS(`${isServer ? 'server' : isMimo ? 'mimo' : 'openai'} speak queued`, {
       sessionId,
-      model: isMimo ? speechConfig.mimoModel : speechConfig.openaiModel,
-      voice: isMimo ? speechConfig.mimoVoice : speechConfig.openaiVoice,
+      model: isServer
+        ? serverSpeechConfig.value?.model
+        : isMimo ? speechConfig.mimoModel : speechConfig.openaiModel,
+      voice: isServer
+        ? serverSpeechConfig.value?.voice
+        : isMimo ? speechConfig.mimoVoice : speechConfig.openaiVoice,
       text: rawText.slice(0, 80),
     })
     const playBlob = (blob: Blob, controller: AbortController) => {
@@ -1237,7 +1328,7 @@ export const useReaderStore = defineStore('reader', () => {
       }
     }
 
-    if (speechConfig.provider === 'openai' || speechConfig.provider === 'mimo') {
+    if (isCurrentSpeechNetwork.value) {
       void startOpenAITTS(rawText, options, sessionId)
       return
     }
@@ -1246,7 +1337,7 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   function pauseTTS() {
-    if (speechConfig.provider === 'openai' || speechConfig.provider === 'mimo') {
+    if (isCurrentSpeechNetwork.value) {
       if (!currentOpenAIAudio) return
       if (currentOpenAIAudio.paused) {
         void currentOpenAIAudio.play()
@@ -1715,10 +1806,12 @@ export const useReaderStore = defineStore('reader', () => {
     refreshChapters,
     isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, stopTTS,
     voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured, mimoSpeechConfigured,
+    serverSpeechConfig, serverSpeechProvider, isCurrentSpeechMimo, isCurrentSpeechNetwork,
     systemTtsNativeEventsReliable,
-    fetchVoices, setVoiceName, setSpeechProvider, setSpeechRate, setSpeechPitch, setSpeechStopTimer, clearSpeechStopTimer,
+    fetchVoices, setVoiceName, setSpeechProvider, loadServerSpeechConfig, setSpeechRate, setSpeechPitch, setSpeechStopTimer, clearSpeechStopTimer,
     setOpenAISpeechSource, setOpenAISpeechBaseUrl, setOpenAISpeechApiKey, setOpenAISpeechModel, setOpenAISpeechVoice, setOpenAISpeechFormat, setOpenAISpeechRequestMode, preloadOpenAITTS,
     setMimoSpeechSource, setMimoSpeechBaseUrl, setMimoSpeechApiKey, setMimoSpeechModel, setMimoSpeechVoice, setMimoSpeechFormat, setMimoSpeechPrompt, setMimoSpeechRequestMode,
+    setServerSpeechRequestMode,
     displayContent, processContentForDisplay,
     isAutoScrolling,
   }

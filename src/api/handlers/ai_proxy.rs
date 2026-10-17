@@ -71,7 +71,9 @@ async fn resolve_ai_proxy_target(
                 "后端模型配置未启用或不完整".to_string(),
             ));
         }
-        let path = if !req.path.trim().is_empty() && ALLOWED_PROXY_PATHS.contains(&req.path.as_str()) {
+        let path = if kind == AiModelKind::Speech && endpoint.is_mimo() {
+            "/v1/chat/completions".to_string()
+        } else if !req.path.trim().is_empty() && ALLOWED_PROXY_PATHS.contains(&req.path.as_str()) {
             req.path
         } else {
             default_ai_model_path_for_endpoint(&endpoint, kind).to_string()

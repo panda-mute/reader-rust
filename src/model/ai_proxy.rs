@@ -5,7 +5,7 @@ use std::time::Duration;
 use url::Url;
 
 const AI_PROXY_TIMEOUT_SECS: u64 = 300;
-const ALLOWED_PROXY_PATHS: [&str; 3] = [
+pub const ALLOWED_PROXY_PATHS: [&str; 3] = [
     "/v1/chat/completions",
     "/v1/images/generations",
     "/v1/audio/speech",

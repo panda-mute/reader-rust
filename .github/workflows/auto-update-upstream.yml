@@ -1,0 +1,106 @@
+name: Auto Update Upstream
+
+# 定时轮询上游 givenge/reader-rust 的最新更新，
+# 自动合并上游改动到 master、保留本地定制（如 MiMo TTS），并触发 Docker 镜像构建。
+# - 无新更新：什么都不做。
+# - 有新更新且无冲突：自动合并到 master + 同步 tag + 触发构建推送多架构 Docker 镜像。
+# - 有冲突：中止合并、不破坏代码，并自动开 Issue 提醒人工介入。
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # 每 2 小时检查一次
+  workflow_dispatch:        # 也支持在 Actions 页面手动运行
+    inputs:
+      force_build:
+        description: '无论是否有上游更新，均强制触发 Docker 构建'
+        type: boolean
+        default: false
+
+concurrency:
+  group: auto-update-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    outputs:
+      updated: ${{ steps.sync.outputs.updated }}
+      version: ${{ steps.sync.outputs.version }}
+    steps:
+      - name: 检出 master 分支（含完整历史）
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: 配置 git 身份
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 添加 upstream 并拉取上游
+        run: |
+          git remote add upstream https://github.com/givenge/reader-rust.git || true
+          git fetch upstream master --tags --quiet
+
+      - name: 检查并合并上游更新
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER=$(awk -F'"' '/^version =/ {print $2; exit}' Cargo.toml)
+          echo "current_version=$VER"
+          echo "updated=false" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+          UPSTREAM_COMMITS=$(git rev-list --count HEAD..upstream/master 2>/dev/null || echo "0")
+          echo "上游新提交数: $UPSTREAM_COMMITS"
+
+          if [ "$UPSTREAM_COMMITS" -eq 0 ]; then
+            echo "✅ 已经是最新，无上游提交需要合并"
+            exit 0
+          fi
+
+          echo "发现上游 $UPSTREAM_COMMITS 个新提交，开始合并..."
+          git checkout master
+          if git merge upstream/master -m "chore: merge upstream changes from givenge/reader-rust"; then
+            NEW_VER=$(awk -F'"' '/^version =/ {print $2; exit}' Cargo.toml)
+            echo "合并后版本: $NEW_VER"
+            sed -i "s/version=$VER/version=$NEW_VER/" "$GITHUB_OUTPUT"
+
+            TAG="v$NEW_VER"
+            if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              git tag -a "$TAG" -m "$TAG"
+              git push origin "$TAG"
+            fi
+
+            git push origin master
+            sed -i "s/updated=false/updated=true/" "$GITHUB_OUTPUT"
+            echo "🎉 成功合并上游并推送到 origin/master"
+          else
+            git merge --abort || true
+            echo "❌ 合并上游出现冲突，已中止，未改动 master"
+            LATEST_SHA=$(git rev-parse --short upstream/master)
+            EXIST=$(gh issue list --state open --search "\"upstream merge conflict $LATEST_SHA\" in:title" --json number --jq 'length' 2>/dev/null || echo "0")
+            if [ "$EXIST" = "0" ]; then
+              BODY=$(printf '自动合并上游 `givenge/reader-rust` (commit: `%s`) 时发生**冲突**，已自动中止合并，master 分支未受影响。\n\n请在本地解决一次冲突：\n```bash\ngit remote add upstream https://github.com/givenge/reader-rust.git || true\ngit fetch upstream\ngit checkout master\ngit merge upstream/master\n# 手动解决冲突后：\ngit add <冲突文件>\ngit commit -m "chore: resolve upstream merge conflicts"\ngit push origin master\n```\n推送后会自动触发 Docker 镜像构建。' "$LATEST_SHA")
+              gh issue create --title "⚠️ 自动更新冲突：上游 $LATEST_SHA 需人工合并解决" --body "$BODY"
+            fi
+          fi
+
+  build:
+    needs: update
+    if: needs.update.outputs.updated == 'true' || inputs.force_build == true
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      ref: master
+      tag: ${{ needs.update.outputs.version }}
+    secrets: inherit

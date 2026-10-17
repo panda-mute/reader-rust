@@ -87,6 +87,9 @@
       :openai-model="store.speechConfig.openaiModel"
       :openai-voice="store.speechConfig.openaiVoice"
       :openai-source="store.speechConfig.openaiSource"
+      :mimo-model="store.speechConfig.mimoModel"
+      :mimo-voice="store.speechConfig.mimoVoice"
+      :mimo-source="store.speechConfig.mimoSource"
       :stop-after-minutes="store.speechConfig.stopAfterMinutes"
       :timer-text="speechTimerText"
       @close="closeTTSPanel"
@@ -96,6 +99,7 @@
       @next="speechNext"
       @voice-change="changeVoice"
       @openai-voice-change="changeOpenAIVoice"
+      @mimo-voice-change="changeMimoVoice"
       @rate-change="adjustSpeechRate"
       @pitch-change="adjustSpeechPitch"
       @timer-change="setSpeechTimer"
@@ -1580,6 +1584,16 @@ function changeVoice(name: string) {
 function changeOpenAIVoice(voiceId: string) {
   if (store.speechConfig.openaiSource === 'server') return
   store.setOpenAISpeechVoice(voiceId)
+  ttsPanelDismissed.value = false
+  showTTSPanel.value = true
+  if (store.isSpeaking && !store.isPaused) {
+    restartSpeechFromCurrentParagraph()
+  }
+}
+
+function changeMimoVoice(voiceId: string) {
+  if (store.speechConfig.mimoSource === 'server') return
+  store.setMimoSpeechVoice(voiceId)
   ttsPanelDismissed.value = false
   showTTSPanel.value = true
   if (store.isSpeaking && !store.isPaused) {

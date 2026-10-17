@@ -37,6 +37,14 @@ vi.mock('../utils/openaiSpeech', () => ({
   requestOpenAISpeechAudio: vi.fn(),
 }))
 
+vi.mock('../utils/mimoSpeech', () => ({
+  DEFAULT_MIMO_BASE_URL: 'https://api.xiaomimimo.com',
+  DEFAULT_MIMO_MODEL: 'mimo-v2.5-tts',
+  DEFAULT_MIMO_VOICE: 'mimo_default',
+  DEFAULT_MIMO_FORMAT: 'wav',
+  requestMimoSpeechAudio: vi.fn(),
+}))
+
 describe('reader local txt chapters', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -75,5 +83,23 @@ describe('reader local txt chapters', () => {
       bookSourceUrl: 'local-txt',
       refresh: 0,
     })
+  })
+
+  it('supports xiaomi mimo speech provider configuration', () => {
+    const readerStore = useReaderStore()
+    expect(readerStore.speechConfig.mimoModel).toBe('mimo-v2.5-tts')
+    expect(readerStore.speechConfig.mimoVoice).toBe('mimo_default')
+    expect(readerStore.speechConfig.mimoFormat).toBe('wav')
+    expect(readerStore.mimoSpeechConfigured).toBe(true)
+
+    readerStore.setSpeechProvider('mimo')
+    expect(readerStore.speechConfig.provider).toBe('mimo')
+    expect(readerStore.speechProviderLabel).toBe('小米 MiMo')
+
+    readerStore.setMimoSpeechPrompt('温柔坚定、稍慢、带点疲惫')
+    expect(readerStore.speechConfig.mimoPrompt).toBe('温柔坚定、稍慢、带点疲惫')
+
+    readerStore.setMimoSpeechVoice('冰糖')
+    expect(readerStore.speechConfig.mimoVoice).toBe('冰糖')
   })
 })

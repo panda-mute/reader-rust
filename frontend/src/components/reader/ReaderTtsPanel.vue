@@ -7,6 +7,7 @@
           <div class="tts-mode">
             当前模式: {{ providerLabel }}
             <span v-if="provider === 'openai'"> · {{ openaiSource === 'server' ? '后端配置' : `${openaiModel} / ${openaiVoice}` }}</span>
+            <span v-else-if="provider === 'mimo'"> · {{ mimoSource === 'server' ? '后端配置' : (mimoModel?.includes('voicedesign') ? '一句话音色设计' : `${mimoModel} / ${mimoVoice}`) }}</span>
           </div>
         </div>
         <button class="tts-close" @click="$emit('close')" aria-label="close tts panel">
@@ -27,17 +28,35 @@
           {{ voice.name }} ({{ voice.lang }})
         </option>
       </select>
-      <div v-else-if="openaiSource === 'server'" class="tts-source-note">
-        OpenAI Speech 使用后端配置
-      </div>
-      <input
-        v-else
-        class="tts-voice-select"
-        type="text"
-        :value="openaiVoice"
-        placeholder="alloy"
-        @input="$emit('openai-voice-change', ($event.target as HTMLInputElement).value)"
-      >
+      <template v-else-if="provider === 'openai'">
+        <div v-if="openaiSource === 'server'" class="tts-source-note">
+          OpenAI Speech 使用后端配置
+        </div>
+        <input
+          v-else
+          class="tts-voice-select"
+          type="text"
+          :value="openaiVoice"
+          placeholder="alloy"
+          @input="$emit('openai-voice-change', ($event.target as HTMLInputElement).value)"
+        >
+      </template>
+      <template v-else-if="provider === 'mimo'">
+        <div v-if="mimoSource === 'server'" class="tts-source-note">
+          小米 MiMo 使用后端配置
+        </div>
+        <div v-else-if="mimoModel?.includes('voicedesign')" class="tts-source-note">
+          voicedesign 模式由提示词生成音色
+        </div>
+        <select
+          v-else
+          class="tts-voice-select"
+          :value="mimoVoice"
+          @change="$emit('mimo-voice-change', ($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="v in MIMO_PRESET_VOICES" :key="v.value" :value="v.value">{{ v.label }}</option>
+        </select>
+      </template>
       <div class="tts-tuning">
         <div class="tts-stepper">
           <span class="tts-label">语速</span>
@@ -68,12 +87,13 @@
 
 <script setup lang="ts">
 import type { ThemePreset } from '../../stores/reader'
+import { MIMO_PRESET_VOICES } from '../../utils/mimoSpeech'
 
 defineProps<{
   show: boolean
   theme: ThemePreset | { popup: string; fontColor: string }
   chapterTitle?: string
-  provider: 'system' | 'openai'
+  provider: 'system' | 'openai' | 'mimo'
   providerLabel: string
   isSpeaking: boolean
   isLoading: boolean
@@ -86,6 +106,9 @@ defineProps<{
   openaiModel: string
   openaiVoice: string
   openaiSource: 'browser' | 'server'
+  mimoModel?: string
+  mimoVoice?: string
+  mimoSource?: 'browser' | 'server'
   stopAfterMinutes: number
   timerText: string
 }>()
@@ -98,6 +121,7 @@ defineEmits<{
   next: []
   'voice-change': [value: string]
   'openai-voice-change': [value: string]
+  'mimo-voice-change': [value: string]
   'rate-change': [delta: number]
   'pitch-change': [delta: number]
   'timer-change': [minutes: number]

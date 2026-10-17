@@ -16,6 +16,13 @@ fn ai_proxy_url_allows_only_openai_compatible_paths() {
         "https://api.example.test/v1/audio/speech"
     );
 
+    let mimo_url =
+        build_ai_proxy_url("https://api.xiaomimimo.com", "/v1/chat/completions", false).unwrap();
+    assert_eq!(
+        mimo_url.as_str(),
+        "https://api.xiaomimimo.com/v1/chat/completions"
+    );
+
     let err = build_ai_proxy_url("https://api.example.test/", "/v1/models", false).unwrap_err();
     assert!(err.contains("unsupported proxy path"));
 }

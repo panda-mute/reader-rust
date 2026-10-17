@@ -322,7 +322,7 @@ Reader-Rust 支持多书源同时搜索，帮助您快速找到想看的书籍�
 
 **听书功能**
 - 支持文字转语音
-- 可使用浏览器自带TTS或者配置OpenAi格式的Speech Api
+- 可使用浏览器自带TTS、OpenAI格式Speech API或小米 MiMo TTS
 
     浏览器TTS推荐使用edge，edge接入了azure的接口，TTS效果最佳
 

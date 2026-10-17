@@ -10,7 +10,7 @@ use crate::api::{auth::AuthContext, AppState};
 use crate::error::error::{ApiResponse, AppError};
 use crate::model::ai_model::{AiModelKind, ResolvedAiModelEndpoint};
 use crate::model::ai_proxy::{
-    ai_proxy_timeout, build_ai_proxy_url, format_ai_proxy_upstream_error,
+    ai_proxy_timeout, build_ai_proxy_url, format_ai_proxy_upstream_error, ALLOWED_PROXY_PATHS,
     validate_ai_proxy_image_url, AiProxyImageRequest, AiProxyRequest,
 };
 
@@ -71,10 +71,15 @@ async fn resolve_ai_proxy_target(
                 "后端模型配置未启用或不完整".to_string(),
             ));
         }
+        let path = if !req.path.trim().is_empty() && ALLOWED_PROXY_PATHS.contains(&req.path.as_str()) {
+            req.path
+        } else {
+            default_ai_model_path_for_endpoint(&endpoint, kind).to_string()
+        };
         return Ok((
             endpoint,
             Some(kind),
-            default_ai_model_path(kind).to_string(),
+            path,
             req.body,
         ));
     }
@@ -82,6 +87,7 @@ async fn resolve_ai_proxy_target(
     Ok((
         ResolvedAiModelEndpoint {
             enabled: true,
+            provider: None,
             base_url: req.base_url,
             api_key: req.api_key.unwrap_or_default(),
             model: String::new(),
@@ -89,6 +95,7 @@ async fn resolve_ai_proxy_target(
             image_size: None,
             voice: None,
             response_format: None,
+            prompt: None,
         },
         None,
         req.path,
@@ -104,11 +111,20 @@ fn infer_ai_model_kind(path: &str) -> AiModelKind {
     }
 }
 
-fn default_ai_model_path(kind: AiModelKind) -> &'static str {
+fn default_ai_model_path_for_endpoint(
+    endpoint: &ResolvedAiModelEndpoint,
+    kind: AiModelKind,
+) -> &'static str {
     match kind {
         AiModelKind::Text => "/v1/chat/completions",
         AiModelKind::Image => "/v1/images/generations",
-        AiModelKind::Speech => "/v1/audio/speech",
+        AiModelKind::Speech => {
+            if endpoint.is_mimo() {
+                "/v1/chat/completions"
+            } else {
+                "/v1/audio/speech"
+            }
+        }
     }
 }
 
@@ -134,16 +150,89 @@ fn apply_server_model_body_defaults(
         }
     }
     if kind == AiModelKind::Speech {
-        if let Some(voice) = endpoint.voice.as_ref().filter(|v| !v.trim().is_empty()) {
+        if endpoint.is_mimo() {
+            apply_mimo_speech_defaults(endpoint, body);
+        } else {
+            apply_openai_speech_defaults(endpoint, body);
+        }
+    }
+}
+
+fn apply_openai_speech_defaults(endpoint: &ResolvedAiModelEndpoint, body: &mut Value) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    if let Some(voice) = endpoint.voice.as_ref().filter(|v| !v.trim().is_empty()) {
+        if !obj.contains_key("voice") {
             obj.insert("voice".to_string(), Value::String(voice.clone()));
         }
-        if let Some(format) = endpoint
-            .response_format
-            .as_ref()
-            .filter(|v| !v.trim().is_empty())
-        {
+    }
+    if let Some(format) = endpoint
+        .response_format
+        .as_ref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        if !obj.contains_key("response_format") {
             obj.insert("response_format".to_string(), Value::String(format.clone()));
         }
+    }
+}
+
+fn apply_mimo_speech_defaults(endpoint: &ResolvedAiModelEndpoint, body: &mut Value) {
+    if body.get("messages").is_none() {
+        if let Some(input_text) = body.get("input").and_then(Value::as_str).map(|s| s.to_string()) {
+            let mut messages = Vec::new();
+            if let Some(prompt) = endpoint.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": prompt,
+                }));
+            }
+            messages.push(serde_json::json!({
+                "role": "assistant",
+                "content": input_text,
+            }));
+            body["messages"] = serde_json::Value::Array(messages);
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("input");
+                obj.remove("speed");
+            }
+        }
+    } else if let Some(prompt) = endpoint.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+        if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+            let has_user = messages
+                .iter()
+                .any(|m| m.get("role").and_then(Value::as_str) == Some("user"));
+            if !has_user {
+                messages.insert(
+                    0,
+                    serde_json::json!({
+                        "role": "user",
+                        "content": prompt,
+                    }),
+                );
+            }
+        }
+    }
+
+    if !body.get("audio").is_some() || !body["audio"].is_object() {
+        body["audio"] = serde_json::json!({});
+    }
+    if let Some(audio_obj) = body.get_mut("audio").and_then(Value::as_object_mut) {
+        if !audio_obj.contains_key("format") {
+            let format = endpoint.response_format.as_deref().unwrap_or("wav");
+            audio_obj.insert("format".to_string(), serde_json::Value::String(format.to_string()));
+        }
+        if !endpoint.model.contains("voicedesign") && !audio_obj.contains_key("voice") {
+            if let Some(voice) = endpoint.voice.as_deref().filter(|v| !v.trim().is_empty()) {
+                audio_obj.insert("voice".to_string(), serde_json::Value::String(voice.to_string()));
+            }
+        }
+    }
+
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("voice");
+        obj.remove("response_format");
     }
 }
 

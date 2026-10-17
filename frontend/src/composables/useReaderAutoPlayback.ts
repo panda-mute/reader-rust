@@ -220,8 +220,19 @@ export function useReaderAutoPlayback(
     currentSpeechSegmentIndex = 0
   }
 
+  function isNetworkSpeech() {
+    return store.speechConfig.provider === 'openai' || store.speechConfig.provider === 'mimo'
+  }
+
+  function isMergedRequestMode() {
+    if (store.speechConfig.provider === 'mimo') {
+      return store.speechConfig.mimoRequestMode === 'merged'
+    }
+    return store.speechConfig.openaiRequestMode === 'merged'
+  }
+
   function buildOpenAISpeechSegments(paragraph: HTMLElement) {
-    if (store.speechConfig.openaiRequestMode === 'merged') {
+    if (isMergedRequestMode()) {
       const merged = buildMergedSpeechSegment(paragraph)
       return merged.text ? [merged] : []
     }
@@ -235,7 +246,7 @@ export function useReaderAutoPlayback(
   }
 
   function ensureSpeechChunkState(paragraph: HTMLElement) {
-    if (store.speechConfig.provider !== 'openai') {
+    if (!isNetworkSpeech()) {
       return {
         text: paragraph.innerText.trim(),
         nextParagraph: getNextParagraphFrom(paragraph),
@@ -257,11 +268,11 @@ export function useReaderAutoPlayback(
   function getUpcomingSpeechChunks(startParagraph: HTMLElement | null) {
     const chunks: string[] = []
 
-    if (store.speechConfig.provider !== 'openai') {
+    if (!isNetworkSpeech()) {
       return chunks
     }
 
-    if (store.speechConfig.openaiRequestMode === 'merged') {
+    if (isMergedRequestMode()) {
       const merged = buildMergedSpeechSegment(startParagraph)
       return merged.text ? [merged.text] : []
     }
@@ -536,7 +547,7 @@ export function useReaderAutoPlayback(
           chunkIndex: currentSpeechSegmentIndex,
           chunkCount: currentSpeechSegments.length,
         })
-        if (store.speechConfig.provider === 'openai' && currentSpeechParagraph === current && currentSpeechSegmentIndex < currentSpeechSegments.length - 1) {
+        if (isNetworkSpeech() && currentSpeechParagraph === current && currentSpeechSegmentIndex < currentSpeechSegments.length - 1) {
           currentSpeechSegmentIndex += 1
           continueSpeechTarget(current, false)
           return

@@ -309,7 +309,7 @@
                 <h2>后端语音模型</h2>
                 <span class="server-status" :class="{ active: serverSpeechReady }">{{ serverSpeechReady ? '已启用' : '未配置' }}</span>
               </div>
-              <p class="settings-hint">{{ serverConfig?.speech.model || '管理员尚未配置 OpenAI Speech' }} · {{ serverConfig?.speech.voice || 'alloy' }}</p>
+              <p class="settings-hint">{{ serverConfig?.speech.model || '管理员尚未配置语音合成' }} · {{ serverConfig?.speech.voice || '默认音色' }}</p>
             </article>
           </div>
 
@@ -461,7 +461,7 @@
 
               <article class="settings-card">
                 <div class="settings-card-head">
-                  <h2>OpenAI Speech</h2>
+                  <h2>语音合成 (TTS)</h2>
                   <label class="switch-line compact">
                     <input v-model="serverConfigDraft.speech.enabled" type="checkbox" />
                     <span class="switch-ui"></span>
@@ -470,20 +470,40 @@
                 </div>
                 <div class="settings-grid">
                   <label class="field span-2">
+                    <span>服务引擎</span>
+                    <select v-model="serverConfigDraft.speech.provider" @change="handleServerSpeechProviderChange">
+                      <option value="openai">OpenAI Speech</option>
+                      <option value="mimo">小米 MiMo</option>
+                    </select>
+                  </label>
+                  <label class="field span-2">
                     <span>Base URL</span>
-                    <input v-model="serverConfigDraft.speech.baseUrl" placeholder="https://api.openai.com" />
+                    <input
+                      v-model="serverConfigDraft.speech.baseUrl"
+                      :placeholder="serverConfigDraft.speech.provider === 'mimo' ? 'https://api.xiaomimimo.com' : 'https://api.openai.com'"
+                    />
                   </label>
                   <label class="field">
                     <span>模型</span>
-                    <input v-model="serverConfigDraft.speech.model" placeholder="gpt-4o-mini-tts" />
+                    <input
+                      v-model="serverConfigDraft.speech.model"
+                      :placeholder="serverConfigDraft.speech.provider === 'mimo' ? 'mimo-v2.5-tts' : 'gpt-4o-mini-tts'"
+                    />
                   </label>
                   <label class="field">
                     <span>音色</span>
-                    <input v-model="serverConfigDraft.speech.voice" placeholder="alloy" />
+                    <input
+                      v-model="serverConfigDraft.speech.voice"
+                      :placeholder="serverConfigDraft.speech.provider === 'mimo' ? 'mimo_default' : 'alloy'"
+                    />
                   </label>
                   <label class="field">
                     <span>格式</span>
-                    <select v-model="serverConfigDraft.speech.responseFormat">
+                    <select v-if="serverConfigDraft.speech.provider === 'mimo'" v-model="serverConfigDraft.speech.responseFormat">
+                      <option value="wav">wav</option>
+                      <option value="mp3">mp3</option>
+                    </select>
+                    <select v-else v-model="serverConfigDraft.speech.responseFormat">
                       <option value="mp3">mp3</option>
                       <option value="wav">wav</option>
                       <option value="opus">opus</option>
@@ -494,6 +514,10 @@
                   <label class="field">
                     <span>API Key</span>
                     <input v-model="serverConfigDraft.speech.apiKey" type="password" autocomplete="off" />
+                  </label>
+                  <label v-if="serverConfigDraft.speech.provider === 'mimo'" class="field span-2">
+                    <span>声音/语气描述 (提示词)</span>
+                    <input v-model="serverConfigDraft.speech.prompt" placeholder="例如：温柔坚定、稍慢、带点疲惫" />
                   </label>
                   <label class="switch-line compact">
                     <input v-model="serverConfigDraft.speech.useFullUrl" type="checkbox" />
@@ -991,13 +1015,42 @@ function createEmptyServerModelConfig(): AiServerModelConfig {
     },
     speech: {
       enabled: false,
+      provider: 'openai',
       baseUrl: '',
       apiKey: '',
       model: 'gpt-4o-mini-tts',
       useFullUrl: false,
       voice: 'alloy',
       responseFormat: 'mp3',
+      prompt: '',
     },
+  }
+}
+
+function handleServerSpeechProviderChange() {
+  if (serverConfigDraft.speech.provider === 'mimo') {
+    if (!serverConfigDraft.speech.baseUrl || serverConfigDraft.speech.baseUrl.includes('openai.com')) {
+      serverConfigDraft.speech.baseUrl = 'https://api.xiaomimimo.com'
+    }
+    if (!serverConfigDraft.speech.model || serverConfigDraft.speech.model === 'gpt-4o-mini-tts') {
+      serverConfigDraft.speech.model = 'mimo-v2.5-tts'
+    }
+    if (!serverConfigDraft.speech.voice || serverConfigDraft.speech.voice === 'alloy') {
+      serverConfigDraft.speech.voice = 'mimo_default'
+    }
+    if (serverConfigDraft.speech.responseFormat !== 'wav' && serverConfigDraft.speech.responseFormat !== 'mp3') {
+      serverConfigDraft.speech.responseFormat = 'wav'
+    }
+  } else {
+    if (!serverConfigDraft.speech.baseUrl || serverConfigDraft.speech.baseUrl.includes('xiaomimimo.com')) {
+      serverConfigDraft.speech.baseUrl = 'https://api.openai.com'
+    }
+    if (!serverConfigDraft.speech.model || serverConfigDraft.speech.model.startsWith('mimo-')) {
+      serverConfigDraft.speech.model = 'gpt-4o-mini-tts'
+    }
+    if (!serverConfigDraft.speech.voice || serverConfigDraft.speech.voice === 'mimo_default') {
+      serverConfigDraft.speech.voice = 'alloy'
+    }
   }
 }
 

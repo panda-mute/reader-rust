@@ -242,8 +242,10 @@ export interface AiImageModelConfig extends AiModelEndpointConfig {
 }
 
 export interface AiSpeechModelConfig extends AiModelEndpointConfig {
+  provider?: 'openai' | 'mimo' | string
   voice: string
   responseFormat: string
+  prompt?: string
 }
 
 export interface AiServerModelConfig {

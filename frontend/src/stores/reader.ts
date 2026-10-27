@@ -1234,8 +1234,13 @@ export const useReaderStore = defineStore('reader', () => {
       if (controller.signal.aborted) return
       if (!isCurrentTTSSession(sessionId)) return
       isSpeechLoading.value = false
+      if (currentOpenAIAudioUrl) {
+        URL.revokeObjectURL(currentOpenAIAudioUrl)
+      }
       currentOpenAIAudioUrl = URL.createObjectURL(blob)
-      const audio = new Audio(currentOpenAIAudioUrl)
+      // Reuse one media element so mobile browsers keep the user-initiated playback session alive.
+      const audio = currentOpenAIAudio || new Audio()
+      audio.src = currentOpenAIAudioUrl
       currentOpenAIAudio = audio
       currentOpenAIAbortController = null
 
@@ -1258,9 +1263,6 @@ export const useReaderStore = defineStore('reader', () => {
       }
 
       audio.onended = () => {
-        if (currentOpenAIAudio === audio) {
-          currentOpenAIAudio = null
-        }
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false

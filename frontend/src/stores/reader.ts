@@ -587,6 +587,36 @@ export const useReaderStore = defineStore('reader', () => {
     void payload
   }
 
+  function updateMediaSession(state: 'none' | 'paused' | 'playing' = 'none') {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
+    const mediaSession = navigator.mediaSession
+    if (state === 'none') {
+      mediaSession.playbackState = 'none'
+      mediaSession.metadata = null
+      return
+    }
+    mediaSession.metadata = new MediaMetadata({
+      title: currentChapter.value?.title || book.value?.name || '正在朗读',
+      artist: book.value?.author || 'TTS 语音助手',
+      album: '语音合成',
+      artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
+    })
+    mediaSession.playbackState = state
+    for (const [action, eventName] of [
+      ['play', 'reader-tts-media-play'],
+      ['pause', 'reader-tts-media-pause'],
+      ['stop', 'reader-tts-media-stop'],
+      ['nexttrack', 'reader-tts-media-next'],
+      ['previoustrack', 'reader-tts-media-prev'],
+    ] as const) {
+      try {
+        mediaSession.setActionHandler(action, () => window.dispatchEvent(new Event(eventName)))
+      } catch {
+        // Some browsers do not implement every action.
+      }
+    }
+  }
+
   function captureTTSCaller() {
     try {
       const stack = new Error().stack || ''
@@ -1213,6 +1243,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
         isSpeaking.value = true
         isPaused.value = false
+        updateMediaSession('playing')
         logTTS('openai onplay', { sessionId, text: rawText.slice(0, 40) })
         options.onStart?.()
       }
@@ -1222,6 +1253,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!audio.ended) {
           isPaused.value = true
           isSpeaking.value = false
+          updateMediaSession('paused')
         }
       }
 
@@ -1232,6 +1264,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
+        updateMediaSession('none')
         logTTS('openai onended', { sessionId, text: rawText.slice(0, 40) })
         if (currentOpenAIAudioUrl) {
           URL.revokeObjectURL(currentOpenAIAudioUrl)
@@ -1247,6 +1280,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
+        updateMediaSession('none')
         const error = new Error(`${providerLabel} 音频播放失败`)
         logTTS(`${isMimo ? 'mimo' : 'openai'} onerror`, { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
@@ -1390,6 +1424,7 @@ export const useReaderStore = defineStore('reader', () => {
     isSpeechLoading.value = false
     isSpeaking.value = false
     isPaused.value = false
+    updateMediaSession('none')
     if (resetCallbacks) {
       clearSpeechStopTimer()
     }

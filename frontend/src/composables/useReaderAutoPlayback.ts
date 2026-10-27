@@ -33,6 +33,7 @@ export function useReaderAutoPlayback(
   let currentSpeechParagraph: HTMLElement | null = null
   let currentSpeechSegments: { text: string; nextParagraph: HTMLElement | null }[] = []
   let currentSpeechSegmentIndex = 0
+  let lastShownSpeechParagraph: HTMLElement | null = null
 
   function isSafariSpeechDelayBrowser() {
     if (typeof navigator === 'undefined') return false
@@ -218,6 +219,7 @@ export function useReaderAutoPlayback(
     currentSpeechParagraph = null
     currentSpeechSegments = []
     currentSpeechSegmentIndex = 0
+    lastShownSpeechParagraph = null
   }
 
   function isNetworkSpeech() {
@@ -463,7 +465,7 @@ export function useReaderAutoPlayback(
 
     const continueDelay = store.speechConfig.provider === 'system'
       ? ((isSafariSpeechDelayBrowser() && !store.systemTtsNativeEventsReliable) ? 160 : 40)
-      : 120
+      : 0
 
     if (paragraph) {
       isSpeechTransitioning = true
@@ -524,7 +526,10 @@ export function useReaderAutoPlayback(
     }
 
     markReadingParagraph(current)
-    showParagraph(current)
+    if (lastShownSpeechParagraph !== current) {
+      showParagraph(current)
+      lastShownSpeechParagraph = current
+    }
     const chunk = ensureSpeechChunkState(current)
     if (!chunk.text.trim()) {
       if (interruptCurrent) {

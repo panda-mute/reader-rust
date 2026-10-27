@@ -1264,7 +1264,8 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
-        updateMediaSession('none')
+        // Keep the media session active while auto-play advances to the next chunk.
+        updateMediaSession('playing')
         logTTS('openai onended', { sessionId, text: rawText.slice(0, 40) })
         if (currentOpenAIAudioUrl) {
           URL.revokeObjectURL(currentOpenAIAudioUrl)

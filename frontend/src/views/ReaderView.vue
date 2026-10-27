@@ -41,7 +41,7 @@
     />
     <ReaderToolbar
       v-if="!isMobile"
-      :is-speaking="store.isSpeaking"
+      :is-speaking="store.isSpeaking || store.isPaused"
       :is-paused="store.isPaused"
       @bookmark="toggleBookmark"
       @search="toggleSearch"
@@ -1597,12 +1597,15 @@ async function changeSpeechSource(source: 'browser' | 'server') {
 function toggleSpeechFromPanel() {
   ttsPanelDismissed.value = false
   showTTSPanel.value = true
-  if (!store.isSpeaking) {
-    startSpeech()
+  if (store.isPaused) {
+    if (!store.resumeSpeech()) restartSpeechFromCurrentParagraph()
     return
   }
-  cancelSpeechTransition()
-  store.pauseTTS()
+  if (store.isSpeaking || store.isSpeechLoading) {
+    store.pauseSpeech()
+    return
+  }
+  startSpeech()
 }
 
 function handleStopTTS() {
@@ -1919,7 +1922,8 @@ watch(() => store.isSpeaking, (speaking) => {
   if (speaking && !ttsPanelDismissed.value) {
     showTTSPanel.value = true
   }
-  if (!speaking && !store.isAutoScrolling) {
+  // Keep the highlight while paused; clear it only when speech has really stopped.
+  if (!speaking && !store.isPaused && !store.isAutoScrolling) {
     clearReadingClass()
   }
 })

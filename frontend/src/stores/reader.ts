@@ -1075,7 +1075,10 @@ export const useReaderStore = defineStore('reader', () => {
         currentUtterance = null
       }
       if (!isCurrentTTSSession(sessionId)) return
-      isSpeaking.value = false
+      // Natural end with a follow-up chunk: stay "speaking" so the UI does not flicker between chunks.
+      if (kind !== 'end' || !options.onEnd) {
+        isSpeaking.value = false
+      }
       isPaused.value = false
       logTTS('system finalize', {
         sessionId,
@@ -1284,7 +1287,10 @@ export const useReaderStore = defineStore('reader', () => {
           currentOpenAIAudio = null
         }
         if (!isCurrentTTSSession(sessionId)) return
-        isSpeaking.value = false
+        // Auto-play continues with the next chunk: stay "speaking" so the UI does not flicker.
+        if (!options.onEnd) {
+          isSpeaking.value = false
+        }
         isPaused.value = false
         logTTS('openai onended', { sessionId, text: rawText.slice(0, 40) })
         if (currentOpenAIAudioUrl) {

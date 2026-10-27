@@ -206,4 +206,33 @@ describe('media notification pause/resume', () => {
     await flush()
     expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(13)
   })
+
+  it('stays speaking between auto-play chunks so the UI does not flicker', async () => {
+    const store = setupStore()
+    const next = deferred<Blob>()
+    vi.mocked(requestOpenAISpeechAudio)
+      .mockResolvedValueOnce(new Blob(['one']))
+      .mockReturnValueOnce(next.promise)
+    store.startTTS('第一段', {
+      onEnd: () => store.startTTS('第二段', {}, false),
+    })
+    await flush()
+
+    FakeAudio.instances[0].finish()
+    await flush()
+    expect(store.isSpeaking).toBe(true)
+
+    next.resolve(new Blob(['two']))
+    await flush()
+    expect(store.isSpeaking).toBe(true)
+  })
+
+  it('stops speaking after a one-off chunk without a follow-up', async () => {
+    const store = setupStore()
+    vi.mocked(requestOpenAISpeechAudio).mockResolvedValue(new Blob(['one']))
+    store.startTTS('第一段')
+    await flush()
+    FakeAudio.instances[0].finish()
+    expect(store.isSpeaking).toBe(false)
+  })
 })

@@ -28,7 +28,7 @@
       </div>
       <div class="tts-btns">
         <button @click="$emit('prev')">上一段</button>
-        <button :disabled="isLoading" @click="$emit('toggle-play')">{{ isLoading ? '加载中' : (!isSpeaking ? '开始' : (isPaused ? '恢复' : '暂停')) }}</button>
+        <button :disabled="isLoading && !isSpeaking && !isPaused" @click="$emit('toggle-play')">{{ isPaused ? '恢复' : (isSpeaking ? '暂停' : (isLoading ? '加载中' : '开始')) }}</button>
         <button @click="$emit('stop')">停止</button>
         <button @click="$emit('next')">下一段</button>
       </div>

@@ -508,6 +508,8 @@ export function useReaderAutoPlayback(
       })
       .catch(() => {
         isSpeechTransitioning = false
+        // Speech stays "speaking" between chunks, so reset it when the next chapter fails to load.
+        store.stopTTS()
       })
   }
 

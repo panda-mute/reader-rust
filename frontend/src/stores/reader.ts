@@ -587,6 +587,49 @@ export const useReaderStore = defineStore('reader', () => {
     void payload
   }
 
+  let mediaSessionHandlersReady = false
+  let mediaSessionMetadataKey = ''
+
+  function updateMediaSession(state: 'none' | 'paused' | 'playing' = 'none') {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
+    const mediaSession = navigator.mediaSession
+    if (state === 'none') {
+      mediaSession.playbackState = 'none'
+      mediaSession.metadata = null
+      mediaSessionMetadataKey = ''
+      return
+    }
+    const title = currentChapter.value?.title || book.value?.name || '正在朗读'
+    const artist = book.value?.author || 'TTS 语音助手'
+    const metadataKey = `${title}\u0000${artist}`
+    // Only rebuild metadata when it changes, otherwise the notification flickers on every chunk.
+    if (metadataKey !== mediaSessionMetadataKey && typeof MediaMetadata !== 'undefined') {
+      mediaSession.metadata = new MediaMetadata({
+        title,
+        artist,
+        album: book.value?.name || '语音合成',
+        artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
+      })
+      mediaSessionMetadataKey = metadataKey
+    }
+    mediaSession.playbackState = state
+    if (mediaSessionHandlersReady || typeof window === 'undefined') return
+    mediaSessionHandlersReady = true
+    for (const [action, eventName] of [
+      ['play', 'reader-tts-media-play'],
+      ['pause', 'reader-tts-media-pause'],
+      ['stop', 'reader-tts-media-stop'],
+      ['nexttrack', 'reader-tts-media-next'],
+      ['previoustrack', 'reader-tts-media-prev'],
+    ] as const) {
+      try {
+        mediaSession.setActionHandler(action, () => window.dispatchEvent(new Event(eventName)))
+      } catch {
+        // Some browsers do not implement every action.
+      }
+    }
+  }
+
   function captureTTSCaller() {
     try {
       const stack = new Error().stack || ''
@@ -1213,6 +1256,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
         isSpeaking.value = true
         isPaused.value = false
+        updateMediaSession('playing')
         logTTS('openai onplay', { sessionId, text: rawText.slice(0, 40) })
         options.onStart?.()
       }
@@ -1222,6 +1266,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (!audio.ended) {
           isPaused.value = true
           isSpeaking.value = false
+          updateMediaSession('paused')
         }
       }
 
@@ -1247,9 +1292,16 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
+        updateMediaSession('none')
         const error = new Error(`${providerLabel} 音频播放失败`)
         logTTS(`${isMimo ? 'mimo' : 'openai'} onerror`, { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
+      }
+
+      if (isPaused.value) {
+        // Paused while this chunk was loading: keep it ready, resumeSpeech() plays it.
+        logTTS('openai loaded while paused', { sessionId, text: rawText.slice(0, 40) })
+        return Promise.resolve()
       }
 
       return audio.play().catch((error: Error) => {
@@ -1374,6 +1426,44 @@ export const useReaderStore = defineStore('reader', () => {
     }
   }
 
+  // Explicit pause for the media notification: works mid-chunk and between chunks.
+  function pauseSpeech() {
+    if (isPaused.value) return
+    isPaused.value = true
+    isSpeaking.value = false
+    if (isCurrentSpeechNetwork.value) {
+      const audio = currentOpenAIAudio
+      if (audio && !audio.paused && !audio.ended) audio.pause()
+      // Between chunks nothing is playing: the flag alone holds the next chunk.
+    } else if (synth?.speaking && !synth.paused) {
+      synth.pause()
+    }
+    updateMediaSession('paused')
+  }
+
+  // Returns false when there is nothing to resume; the caller restarts from the current paragraph.
+  function resumeSpeech(): boolean {
+    if (!isPaused.value) return true
+    isPaused.value = false
+    if (isCurrentSpeechNetwork.value) {
+      const audio = currentOpenAIAudio
+      if (audio && audio.src && !audio.ended) {
+        updateMediaSession('playing')
+        void audio.play().catch(() => undefined)
+        return true
+      }
+      // Still loading: playBlob() sees isPaused === false and plays when ready.
+      return isSpeechLoading.value || !!currentOpenAIAbortController
+    }
+    if (synth?.paused) {
+      synth.resume()
+      isSpeaking.value = true
+      updateMediaSession('playing')
+      return true
+    }
+    return false
+  }
+
   function stopTTS(resetCallbacks = true) {
     const sessionId = beginTTSSession()
     logTTS('stopTTS', {
@@ -1390,6 +1480,7 @@ export const useReaderStore = defineStore('reader', () => {
     isSpeechLoading.value = false
     isSpeaking.value = false
     isPaused.value = false
+    updateMediaSession('none')
     if (resetCallbacks) {
       clearSpeechStopTimer()
     }
@@ -1817,7 +1908,7 @@ export const useReaderStore = defineStore('reader', () => {
     replaceRules, fetchReplaceRules,
     switchSource, preloadNextChapter, preloadAroundChapter,
     refreshChapters,
-    isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, stopTTS,
+    isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, pauseSpeech, resumeSpeech, stopTTS,
     voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured, mimoSpeechConfigured,
     serverSpeechConfig, serverSpeechProvider, isCurrentSpeechMimo, isCurrentSpeechNetwork,
     systemTtsNativeEventsReliable,

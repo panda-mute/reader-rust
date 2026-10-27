@@ -353,6 +353,7 @@ const chapterTextRef = ref<HTMLElement>()
 const showControls = ref(false)
 const isMobile = ref(false)
 let speechTimerTicker: number | null = null
+const mediaActionHandlers = new Map<string, EventListener>()
 let suppressNextTapUntil = 0
 let restorePositionTimer: number | null = null
 let persistPositionTimer: number | null = null
@@ -1710,6 +1711,24 @@ onBeforeRouteLeave(() => {
 })
 
 onMounted(async () => {
+  // Media notification buttons: explicit pause/resume, not a toggle, so they work between chunks too.
+  const mediaActions: Array<[string, () => void]> = [
+    ['reader-tts-media-play', () => {
+      if (!store.resumeSpeech()) restartSpeechFromCurrentParagraph()
+    }],
+    ['reader-tts-media-pause', () => store.pauseSpeech()],
+    ['reader-tts-media-stop', () => {
+      cancelSpeechTransition()
+      store.stopTTS()
+    }],
+    ['reader-tts-media-next', () => speechNext()],
+    ['reader-tts-media-prev', () => speechPrev()],
+  ]
+  for (const [name, handler] of mediaActions) {
+    const listener = () => handler()
+    mediaActionHandlers.set(name, listener)
+    window.addEventListener(name, listener)
+  }
   syncViewportSize()
   appStore.startReadingSession()
   if (!store.book) {
@@ -1754,6 +1773,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  for (const [name, handler] of mediaActionHandlers) window.removeEventListener(name, handler)
+  mediaActionHandlers.clear()
     persistReadingProgressKeepalive()
     appStore.stopReadingSession()
     window.removeEventListener('keydown', handleKeydown)

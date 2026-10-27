@@ -1713,8 +1713,7 @@ onBeforeRouteLeave(() => {
 onMounted(async () => {
   const mediaActions: Array<[string, () => void]> = [
     ['reader-tts-media-play', () => { if (store.isPaused) store.pauseTTS() }],
-    // Not isSpeaking: between chunks we are still "playing" the silent bridge track.
-    ['reader-tts-media-pause', () => { if (!store.isPaused) store.pauseTTS() }],
+    ['reader-tts-media-pause', () => { if (store.isSpeaking) store.pauseTTS() }],
     ['reader-tts-media-stop', () => store.stopTTS()],
     ['reader-tts-media-next', () => speechNext()],
     ['reader-tts-media-prev', () => speechPrev()],

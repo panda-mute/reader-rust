@@ -75,15 +75,9 @@ class FakeAudio {
   }
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((res) => { resolve = res })
-  return { promise, resolve }
-}
-
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-describe('network TTS keep-alive between chunks', () => {
+describe('network TTS audio element', () => {
   beforeEach(() => {
     FakeAudio.instances = []
     const storage = new Map<string, string>()
@@ -119,90 +113,19 @@ describe('network TTS keep-alive between chunks', () => {
     return store
   }
 
-  it('plays a silent track on the same element until the next chunk is ready', async () => {
+  it('reuses one audio element across consecutive chunks', async () => {
     const store = setupStore()
-    const second = deferred<Blob>()
-    vi.mocked(requestOpenAISpeechAudio)
-      .mockResolvedValueOnce(new Blob(['one']))
-      .mockReturnValueOnce(second.promise)
+    vi.mocked(requestOpenAISpeechAudio).mockResolvedValue(new Blob(['one']))
 
     store.startTTS('第一段', {
       onEnd: () => store.startTTS('第二段', {}, false),
     })
     await flush()
-
-    const audio = FakeAudio.instances[0]
-    const firstSrc = audio.src
-    expect(audio.paused).toBe(false)
-    expect(store.isSpeaking).toBe(true)
-
-    audio.finish()
-    await flush()
-
-    // Gap: still playing, looping a different (silent) source.
-    expect(audio.paused).toBe(false)
-    expect(audio.loop).toBe(true)
-    expect(audio.src).not.toBe(firstSrc)
-
-    second.resolve(new Blob(['two']))
+    FakeAudio.instances[0].finish()
     await flush()
 
     expect(FakeAudio.instances).toHaveLength(1)
-    expect(audio.loop).toBe(false)
-    expect(audio.paused).toBe(false)
-    expect(store.isSpeaking).toBe(true)
-  })
-
-  it('holds the next chunk when paused during the gap and plays it on resume', async () => {
-    const store = setupStore()
-    const second = deferred<Blob>()
-    vi.mocked(requestOpenAISpeechAudio)
-      .mockResolvedValueOnce(new Blob(['one']))
-      .mockReturnValueOnce(second.promise)
-
-    store.startTTS('第一段', {
-      onEnd: () => store.startTTS('第二段', {}, false),
-    })
-    await flush()
-    const audio = FakeAudio.instances[0]
-    audio.finish()
-    await flush()
-
-    store.pauseTTS()
-    expect(store.isPaused).toBe(true)
-    expect(audio.paused).toBe(true)
-
-    second.resolve(new Blob(['two']))
-    await flush()
-    expect(audio.paused).toBe(true)
-    expect(audio.loop).toBe(false)
-
-    store.pauseTTS()
-    await flush()
-    expect(audio.paused).toBe(false)
-    expect(store.isPaused).toBe(false)
-    expect(store.isSpeaking).toBe(true)
-  })
-
-  it('stops the silent track when the next chunk fails', async () => {
-    const store = setupStore()
-    const onError = vi.fn()
-    vi.mocked(requestOpenAISpeechAudio)
-      .mockResolvedValueOnce(new Blob(['one']))
-      .mockRejectedValueOnce(new Error('boom'))
-
-    store.startTTS('第一段', {
-      onEnd: () => store.startTTS('第二段', { onError }, false),
-    })
-    await flush()
-    const audio = FakeAudio.instances[0]
-    audio.finish()
-    await flush()
-    await flush()
-
-    expect(onError).toHaveBeenCalled()
-    expect(audio.paused).toBe(true)
-    expect(audio.loop).toBe(false)
+    expect(FakeAudio.instances[0].paused).toBe(false)
   })
 
   it('keeps the element when the user stops speech', async () => {

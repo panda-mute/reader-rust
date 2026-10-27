@@ -139,8 +139,6 @@ interface PreloadedOpenAIAudio {
 }
 
 const OPENAI_AUDIO_PRELOAD_LIMIT = 8
-const SILENT_KEEP_ALIVE_SECONDS = 20
-const KEEP_ALIVE_MAX_MS = 120_000
 
 export type SpeechProvider = 'system' | 'server' | 'openai' | 'mimo'
 export type OpenAISpeechSource = 'browser' | 'server'
@@ -632,18 +630,9 @@ export const useReaderStore = defineStore('reader', () => {
     }
   }
 
-  /*
-   * Network TTS keep-alive.
-   * Android (MIUI/HyperOS in particular) freezes a backgrounded browser as soon as its media
-   * stops playing. Between two speech chunks (and while the next chapter loads) there is
-   * nothing to play, so we loop a long silent track on the same <audio> element until the
-   * next chunk is ready. The element is created once and never replaced, so it keeps the
-   * playback permission granted by the user's first tap.
-   */
+  // One <audio> element for the whole session: replacing it would lose the playback
+  // permission granted by the user's first tap on mobile browsers.
   let openAIAudioElement: HTMLAudioElement | null = null
-  let silentAudioUrl = ''
-  let keepAliveActive = false
-  let keepAliveTimer: number | null = null
 
   function getOpenAIAudioElement() {
     if (!openAIAudioElement) {
@@ -653,73 +642,11 @@ export const useReaderStore = defineStore('reader', () => {
     return openAIAudioElement
   }
 
-  function getSilentAudioUrl() {
-    if (silentAudioUrl) return silentAudioUrl
-    // 8 kHz, 8-bit mono PCM WAV. Long enough that Chrome treats it as real media (> 5s).
-    const sampleRate = 8000
-    const samples = sampleRate * SILENT_KEEP_ALIVE_SECONDS
-    const buffer = new ArrayBuffer(44 + samples)
-    const view = new DataView(buffer)
-    const writeText = (offset: number, text: string) => {
-      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i))
-    }
-    writeText(0, 'RIFF')
-    view.setUint32(4, 36 + samples, true)
-    writeText(8, 'WAVE')
-    writeText(12, 'fmt ')
-    view.setUint32(16, 16, true)
-    view.setUint16(20, 1, true)
-    view.setUint16(22, 1, true)
-    view.setUint32(24, sampleRate, true)
-    view.setUint32(28, sampleRate, true)
-    view.setUint16(32, 1, true)
-    view.setUint16(34, 8, true)
-    writeText(36, 'data')
-    view.setUint32(40, samples, true)
-    new Uint8Array(buffer, 44).fill(128)
-    silentAudioUrl = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
-    return silentAudioUrl
-  }
-
   function detachOpenAIAudioHandlers(audio: HTMLAudioElement) {
     audio.onplay = null
     audio.onpause = null
     audio.onended = null
     audio.onerror = null
-  }
-
-  function stopAudioKeepAlive() {
-    if (keepAliveTimer) {
-      clearTimeout(keepAliveTimer)
-      keepAliveTimer = null
-    }
-    keepAliveActive = false
-    if (openAIAudioElement) openAIAudioElement.loop = false
-  }
-
-  function startAudioKeepAlive() {
-    if (typeof window === 'undefined') return
-    const audio = getOpenAIAudioElement()
-    stopAudioKeepAlive()
-    detachOpenAIAudioHandlers(audio)
-    keepAliveActive = true
-    audio.loop = true
-    audio.src = getSilentAudioUrl()
-    logTTS('keep-alive start')
-    if (!isPaused.value) {
-      void audio.play().catch(() => {
-        // Usually an AbortError because the real chunk replaced the silent track.
-      })
-    }
-    keepAliveTimer = window.setTimeout(() => {
-      keepAliveTimer = null
-      if (!keepAliveActive) return
-      logTTS('keep-alive timeout')
-      stopAudioKeepAlive()
-      audio.pause()
-      isPaused.value = false
-      updateMediaSession('none')
-    }, KEEP_ALIVE_MAX_MS)
   }
 
   function captureTTSCaller() {
@@ -1058,8 +985,6 @@ export const useReaderStore = defineStore('reader', () => {
       currentOpenAIAbortController.abort()
       currentOpenAIAbortController = null
     }
-    stopAudioKeepAlive()
-    // Keep the element itself: replacing it would lose the playback permission on mobile.
     const audio = openAIAudioElement
     if (audio) {
       detachOpenAIAudioHandlers(audio)
@@ -1289,18 +1214,7 @@ export const useReaderStore = defineStore('reader', () => {
     scheduleFinishWatchdog()
   }
 
-  async function startOpenAITTS(rawText: string, rawOptions: TTSOptions, sessionId: number) {
-    const options: TTSOptions = {
-      ...rawOptions,
-      onError: (error) => {
-        // A failed chunk must not leave the silent track looping in the background.
-        if (keepAliveActive && isCurrentTTSSession(sessionId)) {
-          stopAudioKeepAlive()
-          openAIAudioElement?.pause()
-        }
-        rawOptions.onError?.(error)
-      },
-    }
+  async function startOpenAITTS(rawText: string, options: TTSOptions, sessionId: number) {
     const isServer = usesServerSpeech.value
     if (isServer) {
       await aiBookStore.loadServerModelConfig()
@@ -1357,17 +1271,13 @@ export const useReaderStore = defineStore('reader', () => {
       currentOpenAIAudioUrl = URL.createObjectURL(blob)
       // Reuse one media element so mobile browsers keep the user-initiated playback session alive.
       const audio = getOpenAIAudioElement()
-      stopAudioKeepAlive()
       detachOpenAIAudioHandlers(audio)
       audio.src = currentOpenAIAudioUrl
       currentOpenAIAudio = audio
       currentOpenAIAbortController = null
-      // Swapping src can queue a stale pause event from the silent track; ignore pauses before play.
-      let started = false
 
       audio.onplay = () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
-        started = true
         isSpeaking.value = true
         isPaused.value = false
         updateMediaSession('playing')
@@ -1377,7 +1287,7 @@ export const useReaderStore = defineStore('reader', () => {
 
       audio.onpause = () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
-        if (started && !audio.ended) {
+        if (!audio.ended) {
           isPaused.value = true
           isSpeaking.value = false
           updateMediaSession('paused')
@@ -1395,8 +1305,6 @@ export const useReaderStore = defineStore('reader', () => {
           URL.revokeObjectURL(currentOpenAIAudioUrl)
           currentOpenAIAudioUrl = ''
         }
-        // Fill the gap until the next chunk is ready so the OS keeps the page alive.
-        startAudioKeepAlive()
         options.onEnd?.()
       }
 
@@ -1412,12 +1320,6 @@ export const useReaderStore = defineStore('reader', () => {
         const error = new Error(`${providerLabel} 音频播放失败`)
         logTTS(`${isMimo ? 'mimo' : 'openai'} onerror`, { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
-      }
-
-      if (isPaused.value) {
-        // Paused from the notification during the gap: load the chunk, resume plays it.
-        logTTS('openai loaded while paused', { sessionId, text: rawText.slice(0, 40) })
-        return Promise.resolve()
       }
 
       return audio.play().catch((error: Error) => {
@@ -1480,10 +1382,6 @@ export const useReaderStore = defineStore('reader', () => {
     const hasActiveSystemSpeech = !!synth && (synth.speaking || synth.pending || !!currentUtterance)
     const hasActiveOpenAISpeech = !!currentOpenAIAudio || !!currentOpenAIAbortController
 
-    const shouldBridgeGap = interruptCurrent
-      && isCurrentSpeechNetwork.value
-      && hasActiveOpenAISpeech
-      && !isPaused.value
     if (interruptCurrent && (hasActiveSystemSpeech || hasActiveOpenAISpeech || isSpeaking.value || isSpeechLoading.value)) {
       stopTTS(false)
     }
@@ -1516,11 +1414,6 @@ export const useReaderStore = defineStore('reader', () => {
     }
 
     if (isCurrentSpeechNetwork.value) {
-      // Skipping chunks from the notification: keep media playing while the new chunk loads.
-      if (shouldBridgeGap) {
-        startAudioKeepAlive()
-        updateMediaSession('playing')
-      }
       void startOpenAITTS(rawText, options, sessionId)
       return
     }
@@ -1530,19 +1423,15 @@ export const useReaderStore = defineStore('reader', () => {
 
   function pauseTTS() {
     if (isCurrentSpeechNetwork.value) {
-      const audio = currentOpenAIAudio || (keepAliveActive ? openAIAudioElement : null)
-      if (!audio) return
-      if (audio.paused) {
+      if (!currentOpenAIAudio) return
+      if (currentOpenAIAudio.paused) {
+        void currentOpenAIAudio.play()
         isPaused.value = false
-        // During the gap only the silent track is loaded, so we are not "speaking" yet.
-        isSpeaking.value = !keepAliveActive
-        updateMediaSession('playing')
-        void audio.play().catch(() => undefined)
+        isSpeaking.value = true
       } else {
-        audio.pause()
+        currentOpenAIAudio.pause()
         isPaused.value = true
         isSpeaking.value = false
-        updateMediaSession('paused')
       }
       return
     }

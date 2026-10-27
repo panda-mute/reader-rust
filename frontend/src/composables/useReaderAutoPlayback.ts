@@ -473,8 +473,7 @@ export function useReaderAutoPlayback(
         resetSpeechChunkState()
       }
       speechRestartTimer = window.setTimeout(() => {
-        // Network speech keeps loading while paused; the chunk waits until resume.
-        if (store.isPaused && !isNetworkSpeech()) {
+        if (store.isPaused) {
           isSpeechTransitioning = false
           return
         }
@@ -497,7 +496,7 @@ export function useReaderAutoPlayback(
     Promise.resolve(nextChapter())
       .then(() => {
         speechRestartTimer = window.setTimeout(() => {
-          if (store.isPaused && !isNetworkSpeech()) {
+          if (store.isPaused) {
             isSpeechTransitioning = false
             return
           }

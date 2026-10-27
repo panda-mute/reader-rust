@@ -139,6 +139,8 @@ interface PreloadedOpenAIAudio {
 }
 
 const OPENAI_AUDIO_PRELOAD_LIMIT = 8
+// Upper bound on preloaded-but-unplayed chunks kept in memory.
+const OPENAI_AUDIO_CACHE_LIMIT = 10
 
 export type SpeechProvider = 'system' | 'server' | 'openai' | 'mimo'
 export type OpenAISpeechSource = 'browser' | 'server'
@@ -927,6 +929,12 @@ export const useReaderStore = defineStore('reader', () => {
     preloadedOpenAIAudio.value = []
   }
 
+  // Played chunks are not needed again; remove them so long sessions do not keep every blob.
+  function releasePreloadedOpenAIAudio(key: string) {
+    if (!preloadedOpenAIAudio.value.some((entry) => entry.key === key)) return
+    preloadedOpenAIAudio.value = preloadedOpenAIAudio.value.filter((entry) => entry.key !== key)
+  }
+
   async function preloadOpenAITTS(rawText?: string | string[] | null) {
     const isNetworkSpeech = isCurrentSpeechNetwork.value
     const isConfigured = speechConfig.provider === 'server'
@@ -952,7 +960,8 @@ export const useReaderStore = defineStore('reader', () => {
           if (generation !== preloadGeneration) return
           const nextQueue = preloadedOpenAIAudio.value.filter((entry) => entry.key !== key)
           nextQueue.push({ key, blob })
-          preloadedOpenAIAudio.value = nextQueue
+          // Drop the oldest entries (usually chunks skipped over) so memory stays bounded.
+          preloadedOpenAIAudio.value = nextQueue.slice(-OPENAI_AUDIO_CACHE_LIMIT)
         })
         .catch(() => undefined)
         .finally(() => {
@@ -1321,6 +1330,7 @@ export const useReaderStore = defineStore('reader', () => {
     const key = buildOpenAIAudioCacheKey(rawText)
     const cached = preloadedOpenAIAudio.value.find((entry) => entry.key === key)
     if (cached) {
+      releasePreloadedOpenAIAudio(key)
       void Promise.resolve(playBlob(cached.blob, controller))
       return
     }
@@ -1328,6 +1338,8 @@ export const useReaderStore = defineStore('reader', () => {
     const inFlight = inFlightOpenAIAudioRequests.get(key)
     if (inFlight) {
       void inFlight.then((blob) => {
+        // The preload handler ran first and cached this blob; it is being played now.
+        releasePreloadedOpenAIAudio(key)
         return playBlob(blob, controller)
       }).catch((error: Error) => {
         if (controller.signal.aborted || !isCurrentTTSSession(sessionId)) return
@@ -1670,8 +1682,16 @@ export const useReaderStore = defineStore('reader', () => {
     }
   }
 
-  async function preloadNextChapter(index: number) {
-    if (!book.value || !config.enablePreload || index >= chapters.value.length || preloadedContent.value.has(index)) return
+  // Speech needs the next chapter's text before the current one ends, even when preload is off.
+  function preloadChapterForSpeech(index: number) {
+    return preloadNextChapter(index, true)
+  }
+
+  const inFlightChapterPreloads = new Set<number>()
+
+  async function preloadNextChapter(index: number, force = false) {
+    if (!book.value || (!force && !config.enablePreload) || index < 0 || index >= chapters.value.length || preloadedContent.value.has(index)) return
+    if (inFlightChapterPreloads.has(index)) return
     
     // Keep max 3 preloaded chapters
     if (preloadedContent.value.size > 3) {
@@ -1679,11 +1699,14 @@ export const useReaderStore = defineStore('reader', () => {
       if (firstKey !== undefined) preloadedContent.value.delete(firstKey)
     }
 
+    inFlightChapterPreloads.add(index)
     try {
       const res = await fetchChapterContent(index)
       if (!res) return
       preloadedContent.value.set(index, res)
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } finally {
+      inFlightChapterPreloads.delete(index)
+    }
   }
 
   function normalizeChapterTitle(title?: string) {
@@ -1908,7 +1931,7 @@ export const useReaderStore = defineStore('reader', () => {
     replaceRules, fetchReplaceRules,
     switchSource, preloadNextChapter, preloadAroundChapter,
     refreshChapters,
-    isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, pauseSpeech, resumeSpeech, stopTTS,
+    isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, pauseSpeech, resumeSpeech, stopTTS, preloadChapterForSpeech,
     voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured, mimoSpeechConfigured,
     serverSpeechConfig, serverSpeechProvider, isCurrentSpeechMimo, isCurrentSpeechNetwork,
     systemTtsNativeEventsReliable,

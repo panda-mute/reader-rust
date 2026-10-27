@@ -87,6 +87,33 @@ describe('reader local txt chapters', () => {
     })
   })
 
+  it('prefetches the next chapter for speech once, even with preload disabled', async () => {
+    let resolveContent!: (value: string) => void
+    vi.mocked(getBookContent).mockReturnValue(new Promise((resolve) => { resolveContent = resolve }))
+    vi.mocked(getBrowserCachedChapter).mockResolvedValue(null)
+    const readerStore = useReaderStore()
+    expect(readerStore.config.enablePreload).toBe(false)
+    readerStore.book = {
+      name: '本地书',
+      author: '本地导入',
+      origin: 'local-txt',
+      bookUrl: 'local-txt:abc123',
+    }
+    readerStore.chapters = [
+      { title: '第一章', url: 'local-txt:abc123#0', index: 0 },
+      { title: '第二章', url: 'local-txt:abc123#1', index: 1 },
+    ]
+
+    const first = readerStore.preloadChapterForSpeech(1)
+    const second = readerStore.preloadChapterForSpeech(1)
+    resolveContent('第二章正文')
+    await Promise.all([first, second])
+
+    expect(getBookContent).toHaveBeenCalledTimes(1)
+    await expect(readerStore.fetchChapterContent(1)).resolves.toBe('第二章正文')
+    expect(getBookContent).toHaveBeenCalledTimes(1)
+  })
+
   it('supports xiaomi mimo speech provider configuration', () => {
     const readerStore = useReaderStore()
     expect(readerStore.speechConfig.mimoModel).toBe('mimo-v2.5-tts')

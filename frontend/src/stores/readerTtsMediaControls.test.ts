@@ -169,4 +169,41 @@ describe('media notification pause/resume', () => {
     expect(audio.paused).toBe(true)
     expect(store.isPaused).toBe(false)
   })
+
+  it('releases a preloaded chunk once it has been played', async () => {
+    const store = setupStore()
+    vi.mocked(requestOpenAISpeechAudio).mockResolvedValue(new Blob(['a']))
+
+    await store.preloadOpenAITTS('第一段')
+    await flush()
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(1)
+
+    store.startTTS('第一段')
+    await flush()
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(1)
+
+    store.startTTS('第一段')
+    await flush()
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(2)
+  })
+
+  it('caps the number of preloaded chunks kept in memory', async () => {
+    const store = setupStore()
+    vi.mocked(requestOpenAISpeechAudio).mockResolvedValue(new Blob(['a']))
+    const texts = Array.from({ length: 12 }, (_, i) => `段落${i}`)
+
+    await store.preloadOpenAITTS(texts.slice(0, 8))
+    await flush()
+    await store.preloadOpenAITTS(texts.slice(8))
+    await flush()
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(12)
+
+    store.startTTS(texts[11])
+    await flush()
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(12)
+
+    store.startTTS(texts[0])
+    await flush()
+    expect(requestOpenAISpeechAudio).toHaveBeenCalledTimes(13)
+  })
 })

@@ -575,6 +575,10 @@ export function useReaderAutoPlayback(
         void store.preloadOpenAITTS(preloadTexts)
       }, 0)
     }
+    // Near the end of the chapter: fetch the next chapter's text now so the switch has no long gap.
+    if (isNetworkSpeech() && store.hasNext && preloadTexts.length < OPENAI_PRELOAD_CHUNK_LIMIT) {
+      void store.preloadChapterForSpeech(store.currentIndex + 1)
+    }
   }
 
   function speechPrev() {

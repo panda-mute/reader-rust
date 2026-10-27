@@ -587,68 +587,6 @@ export const useReaderStore = defineStore('reader', () => {
     void payload
   }
 
-  let mediaSessionHandlersReady = false
-  let mediaSessionMetadataKey = ''
-
-  function updateMediaSession(state: 'none' | 'paused' | 'playing' = 'none') {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
-    const mediaSession = navigator.mediaSession
-    if (state === 'none') {
-      mediaSession.playbackState = 'none'
-      mediaSession.metadata = null
-      mediaSessionMetadataKey = ''
-      return
-    }
-    const title = currentChapter.value?.title || book.value?.name || '正在朗读'
-    const artist = book.value?.author || 'TTS 语音助手'
-    const metadataKey = `${title}\u0000${artist}`
-    // Only rebuild metadata when it changes, otherwise the notification flickers on every chunk.
-    if (metadataKey !== mediaSessionMetadataKey && typeof MediaMetadata !== 'undefined') {
-      mediaSession.metadata = new MediaMetadata({
-        title,
-        artist,
-        album: book.value?.name || '语音合成',
-        artwork: [{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
-      })
-      mediaSessionMetadataKey = metadataKey
-    }
-    mediaSession.playbackState = state
-    if (mediaSessionHandlersReady) return
-    mediaSessionHandlersReady = true
-    for (const [action, eventName] of [
-      ['play', 'reader-tts-media-play'],
-      ['pause', 'reader-tts-media-pause'],
-      ['stop', 'reader-tts-media-stop'],
-      ['nexttrack', 'reader-tts-media-next'],
-      ['previoustrack', 'reader-tts-media-prev'],
-    ] as const) {
-      try {
-        mediaSession.setActionHandler(action, () => window.dispatchEvent(new Event(eventName)))
-      } catch {
-        // Some browsers do not implement every action.
-      }
-    }
-  }
-
-  // One <audio> element for the whole session: replacing it would lose the playback
-  // permission granted by the user's first tap on mobile browsers.
-  let openAIAudioElement: HTMLAudioElement | null = null
-
-  function getOpenAIAudioElement() {
-    if (!openAIAudioElement) {
-      openAIAudioElement = new Audio()
-      openAIAudioElement.preload = 'auto'
-    }
-    return openAIAudioElement
-  }
-
-  function detachOpenAIAudioHandlers(audio: HTMLAudioElement) {
-    audio.onplay = null
-    audio.onpause = null
-    audio.onended = null
-    audio.onerror = null
-  }
-
   function captureTTSCaller() {
     try {
       const stack = new Error().stack || ''
@@ -985,14 +923,15 @@ export const useReaderStore = defineStore('reader', () => {
       currentOpenAIAbortController.abort()
       currentOpenAIAbortController = null
     }
-    const audio = openAIAudioElement
-    if (audio) {
-      detachOpenAIAudioHandlers(audio)
-      audio.pause()
-      audio.removeAttribute('src')
-      audio.load()
+    if (currentOpenAIAudio) {
+      currentOpenAIAudio.onplay = null
+      currentOpenAIAudio.onpause = null
+      currentOpenAIAudio.onended = null
+      currentOpenAIAudio.onerror = null
+      currentOpenAIAudio.pause()
+      currentOpenAIAudio.src = ''
+      currentOpenAIAudio = null
     }
-    currentOpenAIAudio = null
     if (currentOpenAIAudioUrl) {
       URL.revokeObjectURL(currentOpenAIAudioUrl)
       currentOpenAIAudioUrl = ''
@@ -1265,14 +1204,8 @@ export const useReaderStore = defineStore('reader', () => {
       if (controller.signal.aborted) return
       if (!isCurrentTTSSession(sessionId)) return
       isSpeechLoading.value = false
-      if (currentOpenAIAudioUrl) {
-        URL.revokeObjectURL(currentOpenAIAudioUrl)
-      }
       currentOpenAIAudioUrl = URL.createObjectURL(blob)
-      // Reuse one media element so mobile browsers keep the user-initiated playback session alive.
-      const audio = getOpenAIAudioElement()
-      detachOpenAIAudioHandlers(audio)
-      audio.src = currentOpenAIAudioUrl
+      const audio = new Audio(currentOpenAIAudioUrl)
       currentOpenAIAudio = audio
       currentOpenAIAbortController = null
 
@@ -1280,7 +1213,6 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
         isSpeaking.value = true
         isPaused.value = false
-        updateMediaSession('playing')
         logTTS('openai onplay', { sessionId, text: rawText.slice(0, 40) })
         options.onStart?.()
       }
@@ -1290,16 +1222,16 @@ export const useReaderStore = defineStore('reader', () => {
         if (!audio.ended) {
           isPaused.value = true
           isSpeaking.value = false
-          updateMediaSession('paused')
         }
       }
 
       audio.onended = () => {
+        if (currentOpenAIAudio === audio) {
+          currentOpenAIAudio = null
+        }
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
-        // Keep the media session active while auto-play advances to the next chunk.
-        updateMediaSession('playing')
         logTTS('openai onended', { sessionId, text: rawText.slice(0, 40) })
         if (currentOpenAIAudioUrl) {
           URL.revokeObjectURL(currentOpenAIAudioUrl)
@@ -1315,17 +1247,13 @@ export const useReaderStore = defineStore('reader', () => {
         if (!isCurrentTTSSession(sessionId)) return
         isSpeaking.value = false
         isPaused.value = false
-        updateMediaSession('none')
-        detachOpenAIAudioHandlers(audio)
         const error = new Error(`${providerLabel} 音频播放失败`)
         logTTS(`${isMimo ? 'mimo' : 'openai'} onerror`, { sessionId, text: rawText.slice(0, 40) })
         options.onError?.(error)
       }
 
       return audio.play().catch((error: Error) => {
-        if (!isCurrentTTSSession(sessionId) || currentOpenAIAudio !== audio) return
-        // AbortError means a newer src replaced this one; not a playback failure.
-        if (error.name === 'AbortError') return
+        if (!isCurrentTTSSession(sessionId)) return
         isSpeechLoading.value = false
         isSpeaking.value = false
         isPaused.value = false
@@ -1462,7 +1390,6 @@ export const useReaderStore = defineStore('reader', () => {
     isSpeechLoading.value = false
     isSpeaking.value = false
     isPaused.value = false
-    updateMediaSession('none')
     if (resetCallbacks) {
       clearSpeechStopTimer()
     }
@@ -1652,13 +1579,8 @@ export const useReaderStore = defineStore('reader', () => {
     }
   }
 
-  // Speech needs the next chapter ready before the current one ends, even when preload is off.
-  function preloadChapterForSpeech(index: number) {
-    return preloadNextChapter(index, true)
-  }
-
-  async function preloadNextChapter(index: number, force = false) {
-    if (!book.value || (!force && !config.enablePreload) || index < 0 || index >= chapters.value.length || preloadedContent.value.has(index)) return
+  async function preloadNextChapter(index: number) {
+    if (!book.value || !config.enablePreload || index >= chapters.value.length || preloadedContent.value.has(index)) return
     
     // Keep max 3 preloaded chapters
     if (preloadedContent.value.size > 3) {
@@ -1895,7 +1817,7 @@ export const useReaderStore = defineStore('reader', () => {
     replaceRules, fetchReplaceRules,
     switchSource, preloadNextChapter, preloadAroundChapter,
     refreshChapters,
-    isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, stopTTS, preloadChapterForSpeech,
+    isSpeaking, isSpeechLoading, isPaused, startTTS, pauseTTS, stopTTS,
     voiceList, speechConfig, speechStopAt, speechProviderLabel, openAISpeechConfigured, mimoSpeechConfigured,
     serverSpeechConfig, serverSpeechProvider, isCurrentSpeechMimo, isCurrentSpeechNetwork,
     systemTtsNativeEventsReliable,

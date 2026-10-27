@@ -59,8 +59,9 @@ export function registerPwa(appStore: AppStore) {
     const wasAvailable = appStore.pwaUpdateAvailable
     appStore.setWaitingServiceWorker(worker)
     appStore.setPwaUpdateAvailable(true)
+    worker.postMessage({ type: 'SKIP_WAITING' })
     if (!wasAvailable) {
-      appStore.showToast('发现新版本，可在设置中手动更新', 'success')
+      appStore.showToast('发现新版本，正在切换', 'success')
     }
   }
 

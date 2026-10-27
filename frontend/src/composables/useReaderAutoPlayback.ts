@@ -33,7 +33,6 @@ export function useReaderAutoPlayback(
   let currentSpeechParagraph: HTMLElement | null = null
   let currentSpeechSegments: { text: string; nextParagraph: HTMLElement | null }[] = []
   let currentSpeechSegmentIndex = 0
-  let lastShownSpeechParagraph: HTMLElement | null = null
 
   function isSafariSpeechDelayBrowser() {
     if (typeof navigator === 'undefined') return false
@@ -219,7 +218,6 @@ export function useReaderAutoPlayback(
     currentSpeechParagraph = null
     currentSpeechSegments = []
     currentSpeechSegmentIndex = 0
-    lastShownSpeechParagraph = null
   }
 
   function isNetworkSpeech() {
@@ -465,7 +463,7 @@ export function useReaderAutoPlayback(
 
     const continueDelay = store.speechConfig.provider === 'system'
       ? ((isSafariSpeechDelayBrowser() && !store.systemTtsNativeEventsReliable) ? 160 : 40)
-      : 0
+      : 120
 
     if (paragraph) {
       isSpeechTransitioning = true
@@ -526,10 +524,7 @@ export function useReaderAutoPlayback(
     }
 
     markReadingParagraph(current)
-    if (lastShownSpeechParagraph !== current) {
-      showParagraph(current)
-      lastShownSpeechParagraph = current
-    }
+    showParagraph(current)
     const chunk = ensureSpeechChunkState(current)
     if (!chunk.text.trim()) {
       if (interruptCurrent) {
@@ -578,10 +573,6 @@ export function useReaderAutoPlayback(
       window.setTimeout(() => {
         void store.preloadOpenAITTS(preloadTexts)
       }, 0)
-    }
-    // Near the end of the chapter: fetch the next chapter's text now so the switch has no long gap.
-    if (isNetworkSpeech() && store.hasNext && preloadTexts.length < OPENAI_PRELOAD_CHUNK_LIMIT) {
-      void store.preloadChapterForSpeech(store.currentIndex + 1)
     }
   }
 

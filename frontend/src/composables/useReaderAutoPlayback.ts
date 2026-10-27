@@ -473,7 +473,8 @@ export function useReaderAutoPlayback(
         resetSpeechChunkState()
       }
       speechRestartTimer = window.setTimeout(() => {
-        if (store.isPaused) {
+        // Network speech keeps loading while paused; the chunk waits until resume.
+        if (store.isPaused && !isNetworkSpeech()) {
           isSpeechTransitioning = false
           return
         }
@@ -496,7 +497,7 @@ export function useReaderAutoPlayback(
     Promise.resolve(nextChapter())
       .then(() => {
         speechRestartTimer = window.setTimeout(() => {
-          if (store.isPaused) {
+          if (store.isPaused && !isNetworkSpeech()) {
             isSpeechTransitioning = false
             return
           }
@@ -578,6 +579,10 @@ export function useReaderAutoPlayback(
       window.setTimeout(() => {
         void store.preloadOpenAITTS(preloadTexts)
       }, 0)
+    }
+    // Near the end of the chapter: fetch the next chapter's text now so the switch has no long gap.
+    if (isNetworkSpeech() && store.hasNext && preloadTexts.length < OPENAI_PRELOAD_CHUNK_LIMIT) {
+      void store.preloadChapterForSpeech(store.currentIndex + 1)
     }
   }
 

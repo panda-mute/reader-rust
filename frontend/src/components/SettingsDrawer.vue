@@ -114,6 +114,23 @@
           <section class="drawer-section">
             <h3 class="section-title">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9Z" />
+                <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z" />
+              </svg>
+              AI 模型
+            </h3>
+            <div class="status-card">
+              <span>AI 资料与听书语音</span>
+              <small>配置文本、图片和语音模型，所有书共用。</small>
+            </div>
+            <div class="btn-group">
+              <button class="action-btn" @click="openAiSettings">AI 模型设置</button>
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <h3 class="section-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                 <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
                 <circle cx="9" cy="7" r="4" />
                 <path d="M19 8v6" />
@@ -302,6 +319,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useBookshelfStore } from '../stores/bookshelf'
 import { changePassword, logout as apiLogout } from '../api/user'
@@ -315,6 +333,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const router = useRouter()
 const shelfStore = useBookshelfStore()
 const appVersion = __APP_VERSION__
 const showPasswordPanel = ref(false)
@@ -447,6 +466,11 @@ async function handleChangePassword() {
   } finally {
     changingPassword.value = false
   }
+}
+
+function openAiSettings() {
+  close()
+  router.push({ name: 'ai-settings' })
 }
 
 function openSourceManager() {

@@ -11,8 +11,11 @@ export function buildOpenAISpeechUrl(baseUrl: string) {
 }
 
 export interface OpenAISpeechRequest {
-  source?: 'browser' | 'server'
+  // browser: call the endpoint directly; server: saved backend config;
+  // proxy: backend forwards to the given baseUrl/apiKey (used to test unsaved configs).
+  source?: 'browser' | 'server' | 'proxy'
   baseUrl: string
+  fullUrl?: boolean
   apiKey?: string
   input: string
   model: string
@@ -59,6 +62,7 @@ export async function requestOpenAISpeechAudio({
   voice,
   format,
   speed,
+  fullUrl = false,
   signal,
 }: OpenAISpeechRequest) {
   const body = {
@@ -79,6 +83,22 @@ export async function requestOpenAISpeechAudio({
         useServerConfig: true,
         kind: 'speech',
         path: '/v1/audio/speech',
+        body,
+      }),
+      signal,
+    })
+    : source === 'proxy'
+    ? await fetch('/reader3/aiProxy', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildReaderAuthHeaders(),
+      },
+      body: JSON.stringify({
+        baseUrl: normalizeOpenAIBaseUrl(baseUrl),
+        apiKey: apiKey?.trim() || undefined,
+        path: '/v1/audio/speech',
+        fullUrl,
         body,
       }),
       signal,

@@ -739,6 +739,19 @@ export const useReaderStore = defineStore('reader', () => {
     saveSpeechConfig()
   }
 
+  // Saves the model/credential part of the speech config in one go (AI settings page).
+  function applySpeechModelConfig(patch: Partial<Pick<SpeechConfig,
+    'openaiSource' | 'openaiBaseUrl' | 'openaiApiKey' | 'openaiModel' | 'openaiVoice' | 'openaiFormat'
+    | 'mimoSource' | 'mimoBaseUrl' | 'mimoApiKey' | 'mimoModel' | 'mimoVoice' | 'mimoFormat' | 'mimoPrompt'>>) {
+    const trimmed = { ...patch }
+    for (const key of ['openaiBaseUrl', 'openaiApiKey', 'openaiModel', 'openaiVoice', 'mimoBaseUrl', 'mimoApiKey', 'mimoPrompt'] as const) {
+      if (typeof trimmed[key] === 'string') trimmed[key] = trimmed[key]!.trim()
+    }
+    Object.assign(speechConfig, trimmed)
+    clearPreloadedOpenAIAudio()
+    saveSpeechConfig()
+  }
+
   function setMimoSpeechBaseUrl(url: string) {
     speechConfig.mimoBaseUrl = url.trim()
     clearPreloadedOpenAIAudio()
@@ -1943,7 +1956,7 @@ export const useReaderStore = defineStore('reader', () => {
     systemTtsNativeEventsReliable,
     fetchVoices, setVoiceName, setSpeechProvider, loadServerSpeechConfig, setSpeechRate, setSpeechPitch, setSpeechStopTimer, clearSpeechStopTimer,
     setOpenAISpeechSource, setOpenAISpeechBaseUrl, setOpenAISpeechApiKey, setOpenAISpeechModel, setOpenAISpeechVoice, setOpenAISpeechFormat, setOpenAISpeechRequestMode, preloadOpenAITTS,
-    setMimoSpeechSource, setMimoSpeechBaseUrl, setMimoSpeechApiKey, setMimoSpeechModel, setMimoSpeechVoice, setMimoSpeechFormat, setMimoSpeechPrompt, setMimoSpeechRequestMode,
+    applySpeechModelConfig, setMimoSpeechSource, setMimoSpeechBaseUrl, setMimoSpeechApiKey, setMimoSpeechModel, setMimoSpeechVoice, setMimoSpeechFormat, setMimoSpeechPrompt, setMimoSpeechRequestMode,
     setServerSpeechRequestMode,
     displayContent, processContentForDisplay,
     isAutoScrolling,

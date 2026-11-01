@@ -24,8 +24,11 @@ export const MIMO_PRESET_VOICES = [
 ] as const
 
 export interface MimoSpeechRequest {
-  source?: 'browser' | 'server'
+  // browser: direct (falls back to the proxy on CORS errors); server: saved backend config;
+  // proxy: backend forwards to the given baseUrl/apiKey (used to test unsaved configs).
+  source?: 'browser' | 'server' | 'proxy'
   baseUrl: string
+  fullUrl?: boolean
   apiKey?: string
   input: string
   model?: string
@@ -186,6 +189,7 @@ export async function requestMimoSpeechAudio({
   format = 'wav',
   prompt,
   speed,
+  fullUrl = false,
   signal,
 }: MimoSpeechRequest): Promise<Blob> {
   const body = buildMimoRequestBody({
@@ -199,7 +203,23 @@ export async function requestMimoSpeechAudio({
 
   let response: Response
 
-  if (source === 'server') {
+  if (source === 'proxy') {
+    response = await fetch('/reader3/aiProxy', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildReaderAuthHeaders(),
+      },
+      body: JSON.stringify({
+        baseUrl: normalizeMimoBaseUrl(baseUrl || DEFAULT_MIMO_BASE_URL),
+        apiKey: apiKey?.trim() || undefined,
+        path: '/v1/chat/completions',
+        fullUrl,
+        body,
+      }),
+      signal,
+    })
+  } else if (source === 'server') {
     response = await fetch('/reader3/aiProxy', {
       method: 'POST',
       headers: {

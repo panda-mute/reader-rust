@@ -4,7 +4,7 @@ import { getAiModelConfig } from '../api/aiModel'
 import { deleteAiBookMemory, getAiBookMemory, saveAiBookMemory } from '../api/aiBook'
 import type { AiBookMemory, AiServerModelConfigResponse, Book, BookChapter } from '../types'
 import { useAppStore } from './app'
-import { getAiBookConfig, saveAiBookConfig } from '../utils/aiBookConfig'
+import { getAiBookConfig, hasSavedAiBookConfig, saveAiBookConfig } from '../utils/aiBookConfig'
 import type { AiBookConfig } from '../types'
 import {
   applyMapFallbackToMemory,
@@ -49,6 +49,7 @@ export const useAiBookStore = defineStore('aiBook', () => {
     const request = getAiModelConfig()
       .then((config) => {
         serverModelConfig.value = config
+        refreshConfig()
         return config
       })
       .catch(() => {
@@ -66,7 +67,12 @@ export const useAiBookStore = defineStore('aiBook', () => {
   }
 
   function refreshConfig() {
-    config.value = getAiBookConfig(username.value)
+    const next = getAiBookConfig(username.value)
+    // Nothing saved yet but the admin granted backend models: use them instead of an empty form.
+    if (!hasSavedAiBookConfig(username.value) && canUseServerModel.value) {
+      next.modelSource = 'server'
+    }
+    config.value = next
     return config.value
   }
 

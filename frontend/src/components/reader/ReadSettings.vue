@@ -228,114 +228,22 @@
         </select>
       </div>
 
-      <template v-else-if="store.speechConfig.provider === 'openai'">
-        <div class="setting-row">
-          <label>模型来源</label>
-          <div class="btn-group">
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.openaiSource === 'browser' }"
-              @click="store.setOpenAISpeechSource('browser')"
-            >
-              自己配置
-            </button>
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.openaiSource === 'server' }"
-              :disabled="serverModelLoaded && !canUseServerModel"
-              @click="selectOpenAISpeechSource('server')"
-            >
-              后端配置
-            </button>
+      <template v-else>
+        <div class="setting-row setting-row-top">
+          <label>语音服务</label>
+          <div class="speech-model-summary">
+            <span>{{ speechModelSummary }}</span>
+            <button class="opt-btn" @click="openSpeechModelSettings">修改配置</button>
           </div>
-        </div>
-
-        <template v-if="store.speechConfig.openaiSource === 'browser'">
-        <div class="setting-row setting-row-top">
-          <label>服务地址</label>
-          <input
-            class="voice-select"
-            type="url"
-            :value="store.speechConfig.openaiBaseUrl"
-            placeholder="http://localhost:8825"
-            @input="store.setOpenAISpeechBaseUrl(($event.target as HTMLInputElement).value)"
-          >
-        </div>
-
-        <div class="setting-row setting-row-top">
-          <label>API Key</label>
-          <input
-            class="voice-select"
-            type="password"
-            :value="store.speechConfig.openaiApiKey"
-            placeholder="sk-..."
-            autocomplete="off"
-            @input="store.setOpenAISpeechApiKey(($event.target as HTMLInputElement).value)"
-          >
-        </div>
-
-        <div class="setting-row setting-row-top">
-          <label>语音模型</label>
-          <input
-            class="voice-select"
-            type="text"
-            :value="store.speechConfig.openaiModel"
-            placeholder="gpt-4o-mini-tts"
-            @input="store.setOpenAISpeechModel(($event.target as HTMLInputElement).value)"
-          >
-        </div>
-
-        <div class="setting-row setting-row-top">
-          <label>语音音色</label>
-          <input
-            class="voice-select"
-            type="text"
-            :value="store.speechConfig.openaiVoice"
-            placeholder="alloy"
-            @input="store.setOpenAISpeechVoice(($event.target as HTMLInputElement).value)"
-          >
-        </div>
-
-        <div class="setting-row setting-row-top">
-          <label>音频格式</label>
-          <select
-            class="voice-select"
-            :value="store.speechConfig.openaiFormat"
-            @change="store.setOpenAISpeechFormat(($event.target as HTMLSelectElement).value as 'mp3' | 'wav' | 'opus' | 'flac' | 'pcm')"
-          >
-            <option value="mp3">mp3</option>
-            <option value="wav">wav</option>
-            <option value="opus">opus</option>
-            <option value="flac">flac</option>
-            <option value="pcm">pcm</option>
-          </select>
-        </div>
-        </template>
-
-        <div v-else class="server-speech-note">
-          <template v-if="canUseServerModel">
-            使用管理员配置的 OpenAI Speech 模型、音色和音频格式。请求通过后端代理转发，浏览器不会保存后端 API Key。
-          </template>
-          <template v-else>
-            当前账号没有使用后端模型配置的权限，请让管理员在用户管理中开启“AI 模型”，或切回自己配置。
-          </template>
         </div>
 
         <div class="setting-row setting-row-top">
           <label>请求模式</label>
           <div class="btn-group">
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.openaiRequestMode === 'chunked' }"
-              @click="store.setOpenAISpeechRequestMode('chunked')"
-            >
+            <button class="opt-btn" :class="{ active: requestMode === 'chunked' }" @click="setRequestMode('chunked')">
               少字多请求
             </button>
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.openaiRequestMode === 'merged' }"
-              @click="store.setOpenAISpeechRequestMode('merged')"
-            >
+            <button class="opt-btn" :class="{ active: requestMode === 'merged' }" @click="setRequestMode('merged')">
               多字少请求
             </button>
           </div>
@@ -343,136 +251,7 @@
 
         <div class="setting-hint">
           少字多请求会按短句细分并预加载更多片段；多字少请求会合并较短段落，只预加载下一段。
-          <template v-if="store.speechConfig.openaiSource === 'browser'">URL 和 Key 仅保存在当前浏览器。</template>
-          <template v-else>后端配置由管理员维护，权限不足时朗读请求会失败。</template>
-        </div>
-      </template>
-
-      <template v-else-if="store.speechConfig.provider === 'mimo'">
-        <div class="setting-row">
-          <label>模型来源</label>
-          <div class="btn-group">
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.mimoSource === 'browser' }"
-              @click="store.setMimoSpeechSource('browser')"
-            >
-              自己配置
-            </button>
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.mimoSource === 'server' }"
-              :disabled="serverModelLoaded && !canUseServerModel"
-              @click="selectMimoSpeechSource('server')"
-            >
-              后端配置
-            </button>
-          </div>
-        </div>
-
-        <template v-if="store.speechConfig.mimoSource === 'browser'">
-          <div class="setting-row setting-row-top">
-            <label>服务地址</label>
-            <input
-              class="voice-select"
-              type="url"
-              :value="store.speechConfig.mimoBaseUrl"
-              placeholder="https://api.xiaomimimo.com"
-              @input="store.setMimoSpeechBaseUrl(($event.target as HTMLInputElement).value)"
-            >
-          </div>
-
-          <div class="setting-row setting-row-top">
-            <label>API Key</label>
-            <input
-              class="voice-select"
-              type="password"
-              :value="store.speechConfig.mimoApiKey"
-              placeholder="sk-..."
-              autocomplete="off"
-              @input="store.setMimoSpeechApiKey(($event.target as HTMLInputElement).value)"
-            >
-          </div>
-
-          <div class="setting-row setting-row-top">
-            <label>语音模型</label>
-            <select
-              class="voice-select"
-              :value="store.speechConfig.mimoModel"
-              @change="store.setMimoSpeechModel(($event.target as HTMLSelectElement).value)"
-            >
-              <option v-for="m in MIMO_MODELS" :key="m" :value="m">{{ m }}</option>
-            </select>
-          </div>
-
-          <div v-if="!store.speechConfig.mimoModel.includes('voicedesign')" class="setting-row setting-row-top">
-            <label>语音音色</label>
-            <select
-              class="voice-select"
-              :value="store.speechConfig.mimoVoice"
-              @change="store.setMimoSpeechVoice(($event.target as HTMLSelectElement).value)"
-            >
-              <option v-for="v in MIMO_PRESET_VOICES" :key="v.value" :value="v.value">{{ v.label }}</option>
-            </select>
-          </div>
-
-          <div class="setting-row setting-row-top">
-            <label>音频格式</label>
-            <select
-              class="voice-select"
-              :value="store.speechConfig.mimoFormat"
-              @change="store.setMimoSpeechFormat(($event.target as HTMLSelectElement).value as 'wav' | 'mp3')"
-            >
-              <option value="wav">wav (推荐)</option>
-              <option value="mp3">mp3</option>
-            </select>
-          </div>
-
-          <div class="setting-row setting-row-top">
-            <label>语气/描述</label>
-            <input
-              class="voice-select"
-              type="text"
-              :value="store.speechConfig.mimoPrompt"
-              placeholder="例如：温柔坚定、稍慢、带点疲惫"
-              @input="store.setMimoSpeechPrompt(($event.target as HTMLInputElement).value)"
-            >
-          </div>
-        </template>
-
-        <div v-else class="server-speech-note">
-          <template v-if="canUseServerModel">
-            使用管理员配置的小米 MiMo 模型、音色和语气描述。请求通过后端代理转发，浏览器不会保存后端 API Key。
-          </template>
-          <template v-else>
-            当前账号没有使用后端模型配置的权限，请让管理员在用户管理中开启“AI 模型”，或切回自己配置。
-          </template>
-        </div>
-
-        <div class="setting-row setting-row-top">
-          <label>请求模式</label>
-          <div class="btn-group">
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.mimoRequestMode === 'chunked' }"
-              @click="store.setMimoSpeechRequestMode('chunked')"
-            >
-              少字多请求
-            </button>
-            <button
-              class="opt-btn"
-              :class="{ active: store.speechConfig.mimoRequestMode === 'merged' }"
-              @click="store.setMimoSpeechRequestMode('merged')"
-            >
-              多字少请求
-            </button>
-          </div>
-        </div>
-
-        <div class="setting-hint">
-          小米 MiMo 采用“导演式”提示词驱动语气与语速。调整朗读语速会自动融入提示词。
-          <template v-if="store.speechConfig.mimoSource === 'browser'">URL 和 Key 仅保存在当前浏览器，遇到跨域限制时会自动经由后端代理转发。</template>
-          <template v-else>后端配置由管理员维护，权限不足时朗读请求会失败。</template>
+          <template v-if="store.speechConfig.provider === 'mimo'">小米 MiMo 会把朗读语速自动写进语气描述。</template>
         </div>
       </template>
 
@@ -522,19 +301,48 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useReaderStore, themePresets, fontPresets } from '../../stores/reader'
+import { computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useReaderStore, themePresets, fontPresets, type OpenAISpeechRequestMode } from '../../stores/reader'
 import { useAiBookStore } from '../../stores/aiBook'
-import { useAppStore } from '../../stores/app'
-import { MIMO_MODELS, MIMO_PRESET_VOICES } from '../../utils/mimoSpeech'
 
 const store = useReaderStore()
 const aiBookStore = useAiBookStore()
-const appStore = useAppStore()
+const router = useRouter()
 const config = computed(() => store.config)
 const theme = computed(() => store.currentTheme)
-const serverModelLoaded = ref(false)
 const canUseServerModel = computed(() => Boolean(aiBookStore.serverModelConfig?.canUseServerModel))
+
+const requestMode = computed(() => store.speechConfig.provider === 'mimo'
+  ? store.speechConfig.mimoRequestMode
+  : store.speechConfig.openaiRequestMode)
+
+// One line describing which speech service the current engine will call.
+const speechModelSummary = computed(() => {
+  const c = store.speechConfig
+  const isMimo = c.provider === 'mimo'
+  const source = isMimo ? c.mimoSource : c.openaiSource
+  if (source === 'server') {
+    const server = store.serverSpeechConfig
+    if (!server?.enabled || !server.model) return '后端配置（管理员尚未配置）'
+    return `后端配置 · ${server.model}${server.voice ? ` / ${server.voice}` : ''}`
+  }
+  const baseUrl = isMimo ? c.mimoBaseUrl : c.openaiBaseUrl
+  if (!baseUrl.trim()) return '尚未配置'
+  const model = isMimo ? c.mimoModel : c.openaiModel
+  const voice = isMimo ? c.mimoVoice : c.openaiVoice
+  return `自己配置 · ${model}${voice ? ` / ${voice}` : ''}`
+})
+
+function setRequestMode(mode: OpenAISpeechRequestMode) {
+  if (store.speechConfig.provider === 'mimo') store.setMimoSpeechRequestMode(mode)
+  else store.setOpenAISpeechRequestMode(mode)
+}
+
+function openSpeechModelSettings() {
+  store.closePanel()
+  router.push({ name: 'ai-settings', query: { section: 'speech' } })
+}
 
 function step(key: 'fontSize' | 'fontWeight' | 'pageWidth' | 'animateDuration' | 'scrollPixel' | 'pageSpeed', delta: number, min: number, max: number) {
   const val = Math.max(min, Math.min(max, (config.value[key] as number) + delta))
@@ -561,48 +369,9 @@ function handleVoiceChange(event: Event) {
   store.setVoiceName(target?.value || '')
 }
 
-async function selectOpenAISpeechSource(source: 'browser' | 'server') {
-  if (source === 'browser') {
-    store.setOpenAISpeechSource('browser')
-    return
-  }
-  if (!serverModelLoaded.value) {
-    await aiBookStore.loadServerModelConfig({ force: true })
-    serverModelLoaded.value = true
-  }
-  if (!canUseServerModel.value) {
-    store.setOpenAISpeechSource('browser')
-    appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
-    return
-  }
-  store.setSpeechProvider(store.serverSpeechProvider)
-  if (store.serverSpeechProvider === 'mimo') store.setMimoSpeechSource('server')
-  else store.setOpenAISpeechSource('server')
-}
-
-async function selectMimoSpeechSource(source: 'browser' | 'server') {
-  if (source === 'browser') {
-    store.setMimoSpeechSource('browser')
-    return
-  }
-  if (!serverModelLoaded.value) {
-    await aiBookStore.loadServerModelConfig({ force: true })
-    serverModelLoaded.value = true
-  }
-  if (!canUseServerModel.value) {
-    store.setMimoSpeechSource('browser')
-    appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
-    return
-  }
-  store.setSpeechProvider(store.serverSpeechProvider)
-  if (store.serverSpeechProvider === 'mimo') store.setMimoSpeechSource('server')
-  else store.setOpenAISpeechSource('server')
-}
-
 onMounted(async () => {
   store.fetchVoices()
   await aiBookStore.loadServerModelConfig({ force: true })
-  serverModelLoaded.value = true
   if (store.speechConfig.openaiSource === 'server' && !canUseServerModel.value) {
     store.setOpenAISpeechSource('browser')
   }
@@ -699,23 +468,22 @@ onMounted(async () => {
   color: inherit;
 }
 
+.speech-model-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  word-break: break-all;
+}
+
 .setting-hint {
   margin-top: -8px;
   padding-left: 90px;
   font-size: 12px;
   line-height: 1.5;
   opacity: 0.65;
-}
-
-.server-speech-note {
-  margin-left: 90px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(201, 127, 58, 0.18);
-  background: rgba(201, 127, 58, 0.08);
-  font-size: 12px;
-  line-height: 1.6;
-  color: inherit;
 }
 
 /* Theme swatches */
@@ -895,10 +663,6 @@ onMounted(async () => {
   .setting-hint {
     padding-left: 0;
     margin-top: -12px;
-  }
-
-  .server-speech-note {
-    margin-left: 0;
   }
 }
 </style>

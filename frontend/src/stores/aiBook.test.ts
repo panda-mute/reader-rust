@@ -27,6 +27,33 @@ describe('aiBook store server model config', () => {
 
     expect(getAiModelConfigMock).toHaveBeenCalledTimes(1)
   })
+
+  it('defaults to the backend models when the user has backend access and nothing saved', async () => {
+    getAiModelConfigMock.mockResolvedValue(createServerModelConfigResponse())
+    const store = useAiBookStore()
+    expect(store.config.modelSource).toBe('browser')
+
+    await store.loadServerModelConfig()
+    expect(store.config.modelSource).toBe('server')
+    expect(store.refreshConfig().modelSource).toBe('server')
+  })
+
+  it('keeps an explicitly saved personal config', async () => {
+    getAiModelConfigMock.mockResolvedValue(createServerModelConfigResponse())
+    const store = useAiBookStore()
+    store.persistConfig({ ...store.config, modelSource: 'browser', textBaseUrl: 'https://my.example.com' })
+
+    await store.loadServerModelConfig()
+    expect(store.config.modelSource).toBe('browser')
+  })
+
+  it('stays on the personal config without backend access', async () => {
+    getAiModelConfigMock.mockResolvedValue({ ...createServerModelConfigResponse(), canUseServerModel: false })
+    const store = useAiBookStore()
+
+    await store.loadServerModelConfig()
+    expect(store.config.modelSource).toBe('browser')
+  })
 })
 
 function createServerModelConfigResponse(): AiServerModelConfigResponse {

@@ -59,6 +59,15 @@ export function getAiBookConfig(username?: string | null): AiBookConfig {
   }
 }
 
+/** True once the user has saved their own AI config in this browser. */
+export function hasSavedAiBookConfig(username?: string | null) {
+  try {
+    return localStorage.getItem(storageKey(username)) !== null
+  } catch {
+    return false
+  }
+}
+
 export function saveAiBookConfig(username: string | null | undefined, config: AiBookConfig) {
   const next: AiBookConfig = {
     modelSource: config.modelSource === 'server' ? 'server' : 'browser',

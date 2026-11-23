@@ -142,14 +142,21 @@ const sourceOptions = computed(() => {
 })
 
 const displayResults = computed<SearchBook[]>(() => {
-  return results.value.map((book) => {
+  const normalizeTitle = (title: string) => title.trim().replace(/^《(.*)》$/, '$1').trim()
+  const title = normalizeTitle(searchKey.value)
+  const exact: SearchBook[] = []
+  const related: SearchBook[] = []
+  for (const book of results.value) {
     const source = sourceByUrl.value.get(book.origin)
-    return {
+    const result = {
       ...book,
       originName: book.originName || source?.bookSourceName || book.origin,
       originGroup: book.originGroup || source?.bookSourceGroup,
     }
-  })
+    if (normalizeTitle(book.name) === title) exact.push(result)
+    else related.push(result)
+  }
+  return [...exact, ...related]
 })
 
 function closeEventSource() {
@@ -195,6 +202,7 @@ function doSearch(key: string) {
   eventSource = searchBookMultiSSE({
     key,
     concurrentCount: 24,
+    prioritizeExact: searchScope.value !== 'source',
     bookSourceGroup: searchScope.value === 'group' ? selectedGroup.value : undefined,
     bookSourceUrl: searchScope.value === 'source' ? selectedSourceUrl.value : undefined,
   })

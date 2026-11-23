@@ -12,7 +12,7 @@ use crate::util::text::{normalize_source_url, repair_encoded_url};
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::http::{header, StatusCode};
-use axum::response::sse::Event;
+use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Response, Sse};
 use axum::{
     extract::{multipart::Field, Multipart, Query, State},
@@ -166,6 +166,8 @@ pub struct SearchBookMultiSseRequest {
     search_size: Option<i32>,
     #[serde(rename = "concurrentCount")]
     concurrent_count: Option<i32>,
+    #[serde(rename = "prioritizeExact", default)]
+    prioritize_exact: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1824,6 +1826,45 @@ pub async fn cache_book_sse(
     Ok(Sse::new(ReceiverStream::new(rx).map(Ok::<_, Infallible>)))
 }
 
+fn search_title(title: &str) -> &str {
+    let title = title.trim();
+    title
+        .strip_prefix('《')
+        .and_then(|title| title.strip_suffix('》'))
+        .unwrap_or(title)
+        .trim()
+}
+
+struct SearchResultLimit {
+    seen: std::collections::HashSet<(bool, String, String)>,
+    related_count: usize,
+    size: usize,
+    prioritize_exact: bool,
+}
+
+impl SearchResultLimit {
+    fn accept(&mut self, keyword: &str, book: &SearchBook) -> bool {
+        let exact = self.prioritize_exact && search_title(&book.name) == search_title(keyword);
+        if self.prioritize_exact && !exact && self.related_count >= self.size {
+            return false;
+        }
+        let identity = if exact {
+            (true, book.origin.clone(), book.book_url.clone())
+        } else {
+            (false, book.name.clone(), book.author.clone())
+        };
+        if !self.seen.insert(identity) {
+            return false;
+        }
+        self.related_count += usize::from(!exact);
+        true
+    }
+
+    fn should_stop(&self) -> bool {
+        !self.prioritize_exact && self.related_count >= self.size
+    }
+}
+
 pub async fn search_book_multi_sse(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -1835,9 +1876,10 @@ pub async fn search_book_multi_sse(
         .await
         .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))?;
     let key = q.key.unwrap_or_default();
-    let last_index = q.last_index.unwrap_or(-1);
+    let last_index = q.last_index.unwrap_or(-1).clamp(-1, i32::MAX - 1);
     let search_size = q.search_size.unwrap_or(50).max(1) as usize;
-    let concurrent = q.concurrent_count.unwrap_or(24).max(1) as usize;
+    let concurrent = q.concurrent_count.unwrap_or(24).clamp(1, 24) as usize;
+    let prioritize_exact = q.prioritize_exact;
     let book_source_url =
         q.book_source_url
             .clone()
@@ -1914,57 +1956,59 @@ pub async fn search_book_multi_sse(
         };
 
         let mut idx = last_index + 1;
-        let mut last_idx = last_index;
-        let mut result_map = std::collections::HashSet::<String>::new();
-        let mut total = 0usize;
+        let mut limit = SearchResultLimit {
+            seen: Default::default(),
+            related_count: 0,
+            size: search_size,
+            prioritize_exact,
+        };
         let mut tasks: FuturesUnordered<_> = FuturesUnordered::new();
-        let mut stop_adding = false;
 
         while (idx as usize) < sources.len() || !tasks.is_empty() {
-            // Only add new tasks if we haven't reached search_size yet
-            if !stop_adding && tasks.len() < concurrent && (idx as usize) < sources.len() {
+            if !limit.should_stop() && tasks.len() < concurrent && (idx as usize) < sources.len() {
                 let source = sources[idx as usize].clone();
+                let cur_idx = idx;
+                idx += 1;
+                if source.enabled == Some(false)
+                    || !source
+                        .search_url
+                        .as_deref()
+                        .is_some_and(|url| !url.trim().is_empty())
+                {
+                    continue;
+                }
                 let svc = state_clone.book_service.clone();
                 let k = key.clone();
-                let cur_idx = idx;
                 let user_ns_value = user_ns.clone();
                 tasks.push(tokio::spawn(async move {
                     let res = svc.search_book(&user_ns_value, &source, &k, 1).await;
                     (cur_idx, source.book_source_name, res)
                 }));
-                idx += 1;
                 continue;
             }
 
-            if let Some(res) = tasks.next().await {
+            let next = tokio::select! {
+                next = tasks.next() => next,
+                _ = tx.closed() => return,
+            };
+            if let Some(res) = next {
                 match res {
-                    Ok((cur_idx, _source_name, Ok(list))) => {
-                        last_idx = cur_idx;
-                        let mut batch = Vec::new();
-                        for b in list {
-                            let key = format!("{}_{}", b.name, b.author);
-                            if !result_map.contains(&key) {
-                                result_map.insert(key);
-                                batch.push(b);
+                    Ok((cur_idx, _, Ok(list))) => {
+                        let batch: Vec<_> = list
+                            .into_iter()
+                            .filter(|book| limit.accept(&key, book))
+                            .collect();
+                        if !batch.is_empty() {
+                            let payload = serde_json::json!({"lastIndex": cur_idx, "data": batch});
+                            if tx.send(Event::default().data(payload.to_string())).await.is_err() {
+                                return;
                             }
                         }
-                        if !batch.is_empty() {
-                            total += batch.len();
-                            let payload = serde_json::json!({"lastIndex": cur_idx, "data": batch});
-                            let _ = tx.send(Event::default().data(payload.to_string())).await;
-                        }
-                        // Stop adding new tasks when search_size is reached
-                        if total >= search_size {
-                            stop_adding = true;
-                        }
                     }
-                    Ok((cur_idx, _source_name, Err(e))) => {
-                        last_idx = cur_idx;
-                        tracing::error!("search_book error from {}: {:?}", _source_name, e);
+                    Ok((_, source_name, Err(error))) => {
+                        tracing::error!("search_book error from {}: {:?}", source_name, error);
                     }
-                    Err(e) => {
-                        tracing::error!("task join error: {:?}", e);
-                    }
+                    Err(error) => tracing::error!("task join error: {:?}", error),
                 }
             } else {
                 break;
@@ -1972,11 +2016,11 @@ pub async fn search_book_multi_sse(
         }
 
         let _ = tx
-            .send(Event::default().event("end").data(json_end(last_idx)))
+            .send(Event::default().event("end").data(json_end(idx - 1)))
             .await;
     });
 
-    Ok(Sse::new(ReceiverStream::new(rx).map(Ok)))
+    Ok(Sse::new(ReceiverStream::new(rx).map(Ok)).keep_alive(KeepAlive::default()))
 }
 
 pub async fn search_book_source_sse(
@@ -2999,10 +3043,37 @@ mod tests {
         book_matches_delete_target, build_available_book_source_response,
         cache_count_for_shelf_display, fallback_available_book, local_book_limit_exceeded,
         should_use_available_source_cache, take_available_source_cached_matches,
-        take_available_source_sse_matches, GetAvailableBookSourceRequest,
+        take_available_source_sse_matches, GetAvailableBookSourceRequest, SearchResultLimit,
     };
     use crate::model::{book::Book, search::SearchBook};
     use std::collections::HashSet;
+
+    #[test]
+    fn exact_title_results_survive_related_limit_and_keep_alternative_sources() {
+        let mut limit = SearchResultLimit {
+            seen: HashSet::new(),
+            related_count: 0,
+            size: 1,
+            prioritize_exact: true,
+        };
+        let mut result = SearchBook {
+            name: "晋末长剑".into(),
+            origin: "https://first.example".into(),
+            book_url: "https://first.example/first".into(),
+            ..SearchBook::default()
+        };
+        assert!(limit.accept("廓晋", &result));
+        result.name = "晋庭汉裔".into();
+        assert!(!limit.accept("廓晋", &result));
+        assert!(!limit.should_stop());
+
+        result.name = " 《廓晋》 ".into();
+        result.book_url = "https://first.example/second".into();
+        assert!(limit.accept("廓晋", &result));
+        assert!(!limit.accept("廓晋", &result));
+        result.origin = "https://another.example".into();
+        assert!(limit.accept("廓晋", &result));
+    }
 
     #[test]
     fn delete_target_matches_by_book_url() {

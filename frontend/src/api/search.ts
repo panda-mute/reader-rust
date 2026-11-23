@@ -21,6 +21,7 @@ export function searchBookMultiSSE(params: {
   bookSourceUrl?: string
   concurrentCount?: number
   searchSize?: number
+  prioritizeExact?: boolean
 }) {
   const query = new URLSearchParams()
   query.set('key', params.key)
@@ -28,6 +29,7 @@ export function searchBookMultiSSE(params: {
   if (params.bookSourceUrl) query.set('bookSourceUrl', params.bookSourceUrl)
   if (params.concurrentCount) query.set('concurrentCount', String(params.concurrentCount))
   if (params.searchSize) query.set('searchSize', String(params.searchSize))
+  if (params.prioritizeExact) query.set('prioritizeExact', 'true')
 
   appendAuthQueryParams(query)
 

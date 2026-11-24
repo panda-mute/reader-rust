@@ -150,7 +150,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const searchResults = ref<SearchBook[]>([])
   const isSearching = ref(false)
   const searchKey = ref('')
-  const searchScope = ref<'all' | 'group' | 'source'>('source')
+  const searchScope = ref<'all' | 'group' | 'source'>('all')
   const searchGroup = ref('')
   const searchSourceUrl = ref('')
 
@@ -165,7 +165,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
       return
     }
 
-    searchScope.value = options.scope || 'source'
+    searchScope.value = options.scope || (options.sourceUrl ? 'source' : 'all')
     searchGroup.value = options.group || ''
     searchSourceUrl.value = options.sourceUrl || ''
     searchKey.value = nextKey
@@ -175,7 +175,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchResults.value = []
     searchKey.value = ''
     isSearching.value = false
-    searchScope.value = 'source'
+    searchScope.value = 'all'
     searchGroup.value = ''
     searchSourceUrl.value = ''
   }

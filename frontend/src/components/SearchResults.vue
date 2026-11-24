@@ -88,6 +88,7 @@ import { useAppStore } from '../stores/app'
 import { useSourceStore } from '../stores/source'
 import { searchBookMultiSSE } from '../api/search'
 import { saveBook } from '../api/bookshelf'
+import { rankSearchResults } from '../utils/searchResultRanking'
 import BookGrid from './BookGrid.vue'
 import BookDetailModal from './BookDetailModal.vue'
 import type { Book, SearchBook } from '../types'
@@ -141,23 +142,9 @@ const sourceOptions = computed(() => {
     })
 })
 
-const displayResults = computed<SearchBook[]>(() => {
-  const normalizeTitle = (title: string) => title.trim().replace(/^《(.*)》$/, '$1').trim()
-  const title = normalizeTitle(searchKey.value)
-  const exact: SearchBook[] = []
-  const related: SearchBook[] = []
-  for (const book of results.value) {
-    const source = sourceByUrl.value.get(book.origin)
-    const result = {
-      ...book,
-      originName: book.originName || source?.bookSourceName || book.origin,
-      originGroup: book.originGroup || source?.bookSourceGroup,
-    }
-    if (normalizeTitle(book.name) === title) exact.push(result)
-    else related.push(result)
-  }
-  return [...exact, ...related]
-})
+const displayResults = computed(() =>
+  rankSearchResults(results.value, searchKey.value, sourceByUrl.value),
+)
 
 function closeEventSource() {
   if (eventSource) {
@@ -212,7 +199,12 @@ function doSearch(key: string) {
       const data = JSON.parse(event.data)
       if (data.data && Array.isArray(data.data)) {
         const existing = new Set(shelfStore.searchResults.map((r) => `${r.origin}::${r.bookUrl}`))
-        const newBooks = data.data.filter((b: SearchBook) => !existing.has(`${b.origin}::${b.bookUrl}`))
+        const newBooks = data.data.filter((book: SearchBook) => {
+          const identity = `${book.origin}::${book.bookUrl}`
+          if (existing.has(identity)) return false
+          existing.add(identity)
+          return true
+        })
         shelfStore.searchResults = [...shelfStore.searchResults, ...newBooks]
       }
     } catch { /* skip */ }

@@ -115,7 +115,7 @@ function handleSearch() {
   if (!value) return
 
   shelfStore.startSearch(value, {
-    scope: route.path === '/explore' ? 'all' : 'source',
+    scope: 'all',
     sourceUrl: route.path === '/explore' ? exploreStore.activeSourceUrl : '',
   })
 

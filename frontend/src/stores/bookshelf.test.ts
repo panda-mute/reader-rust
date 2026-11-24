@@ -34,13 +34,13 @@ describe('bookshelf search state', () => {
     vi.mocked(listBrowserCacheSummary).mockResolvedValue([])
   })
 
-  it('starts searches in single-source scope by default', () => {
+  it('starts searches across all sources by default', () => {
     const store = useBookshelfStore()
 
     store.startSearch('星门')
 
     expect(store.searchKey).toBe('星门')
-    expect(store.searchScope).toBe('source')
+    expect(store.searchScope).toBe('all')
     expect(store.searchSourceUrl).toBe('')
     expect(store.searchGroup).toBe('')
   })

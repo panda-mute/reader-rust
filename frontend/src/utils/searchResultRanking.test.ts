@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BookSource, SearchBook } from '../types'
-import { rankSearchResults } from './searchResultRanking'
+import { aggregateSearchResults, rankSearchResults } from './searchResultRanking'
 
 function source(url: string, name: string, group?: string, type = 0): BookSource {
   return { bookSourceUrl: url, bookSourceName: name, bookSourceGroup: group, bookSourceType: type }
@@ -44,5 +44,22 @@ describe('rankSearchResults', () => {
     ]
 
     expect(rankSearchResults(entries, '榴弹怕水', sources).map((book) => book.name)).toEqual(['廓晋', '绍宋', '晋末长剑'])
+  })
+
+  it('aggregates duplicate title and author entries across multiple sources', () => {
+    const srcA = source('https://a.example', '书源A', '小说')
+    const srcB = source('https://b.example', '书源B', '小说')
+    const srcC = source('https://c.example', '书源C', '小说')
+    const entries = [
+      result(srcA, 'https://a.example/book/1', '《廓晋》', '榴弹怕水'),
+      result(srcB, 'https://b.example/book/9', '廓 晋', '作者：榴弹怕水'),
+      result(srcC, 'https://c.example/book/5', '廓晋', '另一作者'),
+    ]
+
+    const aggregated = aggregateSearchResults(entries)
+    expect(aggregated).toHaveLength(2)
+    expect(aggregated[0].bookUrl).toBe('https://a.example/book/1')
+    expect(aggregated[0].bookSourceUrls).toEqual(['https://a.example', 'https://b.example'])
+    expect(aggregated[1].author).toBe('另一作者')
   })
 })

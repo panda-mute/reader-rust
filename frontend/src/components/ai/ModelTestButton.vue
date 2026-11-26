@@ -1,9 +1,12 @@
 <template>
   <div class="model-test">
-    <button class="test-btn" type="button" :disabled="running" @click="run">
-      <span v-if="running" class="test-spinner" aria-hidden="true"></span>
-      {{ running ? '测试中...' : label }}
-    </button>
+    <div class="test-actions">
+      <button class="test-btn" type="button" :disabled="running" @click="run">
+        <span v-if="running" class="test-spinner" aria-hidden="true"></span>
+        {{ running ? '测试中...' : label }}
+      </button>
+      <button v-if="running" class="cancel-btn" type="button" @click="cancelRunning">取消</button>
+    </div>
     <p v-if="result" class="test-result" :class="result.ok ? 'ok' : 'fail'" role="status">
       <strong>{{ result.ok ? '成功' : '失败' }}</strong>
       <span>{{ result.message }}</span>
@@ -19,7 +22,7 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import type { ModelTestResult } from '../../utils/aiModelTest'
 
 const props = withDefaults(defineProps<{
-  runner: () => Promise<ModelTestResult>
+  runner: (signal?: AbortSignal) => Promise<ModelTestResult>
   label?: string
   // Asked before running, e.g. when the test costs money.
   confirmText?: string
@@ -35,22 +38,52 @@ const running = ref(false)
 const result = ref<{ ok: boolean; message: string; elapsedMs: number } | null>(null)
 const audioUrl = ref('')
 const imageUrl = ref('')
+let activeController: AbortController | null = null
+let runSequence = 0
 
-watch(() => props.watchKey, clearResult)
+watch(() => props.watchKey, () => {
+  abortActive()
+  clearResult()
+})
+
+function abortActive() {
+  if (activeController) {
+    activeController.abort()
+    activeController = null
+  }
+}
+
+function cancelRunning() {
+  runSequence += 1
+  abortActive()
+  running.value = false
+  result.value = null
+}
 
 async function run() {
   if (props.confirmText && !window.confirm(props.confirmText)) return
+  abortActive()
   clearResult()
+  const seq = ++runSequence
+  const controller = new AbortController()
+  activeController = controller
   running.value = true
   try {
-    const outcome = await props.runner()
+    const outcome = await props.runner(controller.signal)
+    if (seq !== runSequence || controller.signal.aborted) return
     result.value = { ok: true, message: outcome.message, elapsedMs: outcome.elapsedMs }
     if (outcome.audio) audioUrl.value = URL.createObjectURL(outcome.audio)
     if (outcome.imageUrl) imageUrl.value = outcome.imageUrl
   } catch (error) {
+    if (seq !== runSequence || controller.signal.aborted) return
     result.value = { ok: false, message: (error as Error).message || '测试失败', elapsedMs: 0 }
   } finally {
-    running.value = false
+    if (activeController === controller) {
+      activeController = null
+    }
+    if (seq === runSequence) {
+      running.value = false
+    }
   }
 }
 
@@ -61,7 +94,11 @@ function clearResult() {
   imageUrl.value = ''
 }
 
-onBeforeUnmount(clearResult)
+onBeforeUnmount(() => {
+  runSequence += 1
+  abortActive()
+  clearResult()
+})
 </script>
 
 <style scoped>
@@ -69,6 +106,28 @@ onBeforeUnmount(clearResult)
   display: grid;
   gap: 8px;
   justify-items: start;
+}
+
+.test-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cancel-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cancel-btn:hover {
+  color: var(--color-danger, #d14b4b);
+  border-color: rgba(209, 75, 75, 0.35);
 }
 
 .test-btn {

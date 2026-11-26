@@ -1,13 +1,16 @@
 import { summarizeHttpErrorBody } from './httpError'
+import { buildReaderAuthHeaders } from './secureAccess'
 
-export const DEFAULT_OPENAI_BASE_URL = 'http://localhost:8825'
+export const DEFAULT_OPENAI_BASE_URL = ''
 
 export function normalizeOpenAIBaseUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
 }
 
-export function buildOpenAISpeechUrl(baseUrl: string) {
-  return `${normalizeOpenAIBaseUrl(baseUrl)}/v1/audio/speech`
+export function buildOpenAISpeechUrl(baseUrl: string, fullUrl = false) {
+  const normalized = normalizeOpenAIBaseUrl(baseUrl)
+  if (!normalized) return ''
+  return fullUrl ? normalized : `${normalized}/v1/audio/speech`
 }
 
 export interface OpenAISpeechRequest {
@@ -103,7 +106,7 @@ export async function requestOpenAISpeechAudio({
       }),
       signal,
     })
-    : await fetch(buildOpenAISpeechUrl(baseUrl), {
+    : await fetch(buildOpenAISpeechUrl(baseUrl, fullUrl), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -118,15 +121,4 @@ export async function requestOpenAISpeechAudio({
   }
 
   return response.blob()
-}
-
-function buildReaderAuthHeaders() {
-  const headers: Record<string, string> = {}
-  try {
-    const token = localStorage.getItem('accessToken') || ''
-    if (token) headers.Authorization = token
-  } catch {
-    // ignore storage access failures
-  }
-  return headers
 }

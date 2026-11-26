@@ -7,6 +7,8 @@ pub struct SearchBook {
     pub author: String,
     pub book_url: String,
     pub origin: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_name: Option<String>,
     pub cover_url: Option<String>,
     pub intro: Option<String>,
     pub kind: Option<String>,

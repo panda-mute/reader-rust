@@ -25,4 +25,6 @@ pub struct AppState {
     pub ai_book_service: Arc<AiBookService>,
     pub ai_model_service: Arc<AiModelService>,
     pub update_service: Arc<UpdateService>,
+    pub ai_proxy_client: reqwest::Client,
+    pub ai_proxy_client_allow_private: reqwest::Client,
 }

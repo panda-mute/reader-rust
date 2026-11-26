@@ -12,6 +12,20 @@ export function buildAuthHeaderValues(storage: StorageLike) {
   }
 }
 
+export function buildReaderAuthHeaders(storage?: StorageLike): Record<string, string> {
+  const headers: Record<string, string> = {}
+  try {
+    const resolvedStorage = storage || (typeof localStorage !== 'undefined' ? localStorage : undefined)
+    if (!resolvedStorage) return headers
+    const { accessToken, secureKey } = buildAuthHeaderValues(resolvedStorage)
+    if (accessToken) headers.Authorization = accessToken
+    if (secureKey) headers['X-Secure-Key'] = secureKey
+  } catch {
+    // ignore storage access failures
+  }
+  return headers
+}
+
 export function appendAuthQueryParams(params: URLSearchParams, storage: StorageLike = localStorage) {
   const { accessToken, secureKey } = buildAuthHeaderValues(storage)
   if (accessToken) {

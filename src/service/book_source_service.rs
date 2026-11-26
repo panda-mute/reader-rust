@@ -124,6 +124,10 @@ impl BookSourceService {
 }
 
 pub fn book_source_has_group(source: &BookSource, target: &str) -> bool {
+    let target = target.trim();
+    if target.is_empty() {
+        return false;
+    }
     source
         .book_source_group
         .as_deref()
@@ -131,6 +135,38 @@ pub fn book_source_has_group(source: &BookSource, target: &str) -> bool {
         .unwrap_or_default()
         .into_iter()
         .any(|group| group == target)
+}
+
+pub fn is_searchable_source(source: &BookSource, allow_non_text: bool, allow_invalid: bool) -> bool {
+    if source.enabled == Some(false) {
+        return false;
+    }
+    if !source
+        .search_url
+        .as_deref()
+        .is_some_and(|url| !url.trim().is_empty())
+    {
+        return false;
+    }
+    if !allow_non_text && source.book_source_type.unwrap_or(0) != 0 {
+        return false;
+    }
+    if !allow_invalid && book_source_has_group(source, INVALID_BOOK_SOURCE_GROUP) {
+        return false;
+    }
+    true
+}
+
+pub fn sort_sources_for_search(sources: &mut [BookSource]) {
+    sources.sort_by(|a, b| {
+        let a_invalid = book_source_has_group(a, INVALID_BOOK_SOURCE_GROUP);
+        let b_invalid = book_source_has_group(b, INVALID_BOOK_SOURCE_GROUP);
+        a_invalid
+            .cmp(&b_invalid)
+            .then_with(|| a.custom_order.unwrap_or(0).cmp(&b.custom_order.unwrap_or(0)))
+            .then_with(|| b.weight.unwrap_or(0).cmp(&a.weight.unwrap_or(0)))
+            .then_with(|| a.book_source_name.cmp(&b.book_source_name))
+    });
 }
 
 pub fn set_invalid_book_source_group(source: &mut BookSource, invalid: bool) -> bool {
@@ -163,8 +199,8 @@ pub fn set_invalid_book_source_group(source: &mut BookSource, invalid: bool) -> 
     true
 }
 
-fn split_source_groups(raw: &str) -> Vec<String> {
-    raw.split(|ch| matches!(ch, ',' | ';' | '；' | '、'))
+pub fn split_source_groups(raw: &str) -> Vec<String> {
+    raw.split(|ch| matches!(ch, ',' | '，' | ';' | '；' | '、' | '|' | '/'))
         .map(str::trim)
         .filter(|group| !group.is_empty())
         .map(str::to_string)

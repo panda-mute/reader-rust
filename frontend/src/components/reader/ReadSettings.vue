@@ -234,6 +234,7 @@
           <div class="speech-model-summary">
             <span>{{ speechModelSummary }}</span>
             <button class="opt-btn" @click="openSpeechModelSettings">修改配置</button>
+            <button class="opt-btn" @click="openTtsPanel">朗读面板</button>
           </div>
         </div>
 
@@ -275,12 +276,15 @@
 
       <div class="setting-row setting-row-top">
         <label>定时停止</label>
-        <div class="btn-group">
-          <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 0 }" @click="store.setSpeechStopTimer(0)">关闭</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 15 }" @click="store.setSpeechStopTimer(15)">15分钟</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 30 }" @click="store.setSpeechStopTimer(30)">30分钟</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 60 }" @click="store.setSpeechStopTimer(60)">60分钟</button>
-          <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 120 }" @click="store.setSpeechStopTimer(120)">120分钟</button>
+        <div class="timer-setting-col">
+          <div class="btn-group">
+            <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 0 }" @click="store.setSpeechStopTimer(0)">关闭</button>
+            <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 15 }" @click="store.setSpeechStopTimer(15)">15分钟</button>
+            <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 30 }" @click="store.setSpeechStopTimer(30)">30分钟</button>
+            <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 60 }" @click="store.setSpeechStopTimer(60)">60分钟</button>
+            <button class="opt-btn" :class="{ active: store.speechConfig.stopAfterMinutes === 120 }" @click="store.setSpeechStopTimer(120)">120分钟</button>
+          </div>
+          <div v-if="stopTimerHint" class="timer-active-hint">{{ stopTimerHint }}</div>
         </div>
       </div>
 
@@ -306,12 +310,26 @@ import { useRouter } from 'vue-router'
 import { useReaderStore, themePresets, fontPresets, type OpenAISpeechRequestMode } from '../../stores/reader'
 import { useAiBookStore } from '../../stores/aiBook'
 
+const emit = defineEmits<{
+  'open-tts': []
+}>()
+
 const store = useReaderStore()
 const aiBookStore = useAiBookStore()
 const router = useRouter()
 const config = computed(() => store.config)
 const theme = computed(() => store.currentTheme)
-const canUseServerModel = computed(() => Boolean(aiBookStore.serverModelConfig?.canUseServerModel))
+const canUseServerModel = computed(() => Boolean(
+  aiBookStore.serverModelConfig?.canUseServerModel || aiBookStore.serverModelConfig?.isAdmin,
+))
+
+const stopTimerHint = computed(() => {
+  if (!store.speechStopAt) return ''
+  const remainMs = store.speechStopAt - Date.now()
+  if (remainMs <= 0) return ''
+  const mins = Math.ceil(remainMs / 60000)
+  return `剩余约 ${mins} 分钟后自动停止朗读`
+})
 
 const requestMode = computed(() => store.speechConfig.provider === 'mimo'
   ? store.speechConfig.mimoRequestMode
@@ -344,6 +362,11 @@ function openSpeechModelSettings() {
   router.push({ name: 'ai-settings', query: { section: 'speech' } })
 }
 
+function openTtsPanel() {
+  store.closePanel()
+  emit('open-tts')
+}
+
 function step(key: 'fontSize' | 'fontWeight' | 'pageWidth' | 'animateDuration' | 'scrollPixel' | 'pageSpeed', delta: number, min: number, max: number) {
   const val = Math.max(min, Math.min(max, (config.value[key] as number) + delta))
   store.updateConfig(key, val)
@@ -371,7 +394,7 @@ function handleVoiceChange(event: Event) {
 
 onMounted(async () => {
   store.fetchVoices()
-  await aiBookStore.loadServerModelConfig({ force: true })
+  await aiBookStore.loadServerModelConfig()
   if (store.speechConfig.openaiSource === 'server' && !canUseServerModel.value) {
     store.setOpenAISpeechSource('browser')
   }
@@ -463,9 +486,25 @@ onMounted(async () => {
   min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--color-border, rgba(127, 127, 127, 0.24));
+  background: var(--color-bg-sunken, rgba(127, 127, 127, 0.14));
   color: inherit;
+}
+
+.voice-select option {
+  background: var(--color-bg-elevated, #fff);
+  color: var(--color-text, #111);
+}
+
+.timer-setting-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.timer-active-hint {
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .speech-model-summary {

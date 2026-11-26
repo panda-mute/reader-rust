@@ -23,7 +23,12 @@
       </div>
       <div v-if="provider === 'mimo' || provider === 'openai'" class="tts-engine-switch" role="group" aria-label="模型来源">
         <button :class="{ active: (provider === 'mimo' ? mimoSource : openaiSource) === 'browser' }" @click="$emit('source-change', 'browser')">自己配置</button>
-        <button :class="{ active: (provider === 'mimo' ? mimoSource : openaiSource) === 'server' }" @click="$emit('source-change', 'server')">后端配置</button>
+        <button
+          :class="{ active: (provider === 'mimo' ? mimoSource : openaiSource) === 'server' }"
+          :disabled="canUseServerSpeech === false"
+          :title="canUseServerSpeech === false ? '后端语音未启用或当前账号无使用权限' : '使用服务器统一配置的语音模型'"
+          @click="$emit('source-change', 'server')"
+        >后端配置</button>
         <button @click="$emit('settings')">语音设置</button>
       </div>
       <div class="tts-btns">
@@ -48,20 +53,25 @@
       </template>
       <template v-else-if="provider === 'openai'">
         <div v-if="openaiSource === 'server'" class="tts-source-note">
-          OpenAI Speech 使用后端配置
+          OpenAI Speech 使用后端配置<template v-if="serverSpeechConfig?.model"> · {{ serverSpeechConfig.model }}{{ serverSpeechConfig.voice ? ` / ${serverSpeechConfig.voice}` : '' }}</template>
         </div>
-        <input
-          v-else
-          class="tts-voice-select"
-          type="text"
-          :value="openaiVoice"
-          placeholder="alloy"
-          @input="$emit('openai-voice-change', ($event.target as HTMLInputElement).value)"
-        >
+        <template v-else>
+          <input
+            class="tts-voice-select"
+            type="text"
+            list="reader-tts-openai-voices"
+            :value="openaiVoice"
+            placeholder="输入或选择音色，例如 alloy"
+            @change="$emit('openai-voice-change', ($event.target as HTMLInputElement).value.trim())"
+          >
+          <datalist id="reader-tts-openai-voices">
+            <option v-for="v in OPENAI_PRESET_VOICES" :key="v" :value="v" />
+          </datalist>
+        </template>
       </template>
       <template v-else-if="provider === 'mimo'">
         <div v-if="mimoSource === 'server'" class="tts-source-note">
-          小米 MiMo 使用后端配置
+          小米 MiMo 使用后端配置<template v-if="serverSpeechConfig?.model"> · {{ serverSpeechConfig.model }}{{ serverSpeechConfig.voice ? ` / ${serverSpeechConfig.voice}` : '' }}</template>
         </div>
         <div v-else-if="mimoModel?.includes('voicedesign')" class="tts-source-note">
           voicedesign 模式由提示词生成音色
@@ -75,6 +85,13 @@
           <option v-for="v in MIMO_PRESET_VOICES" :key="v.value" :value="v.value">{{ v.label }}</option>
         </select>
       </template>
+      <div v-if="requestMode && provider !== 'system'" class="tts-request-mode" role="group" aria-label="请求模式">
+        <span class="tts-label">请求模式</span>
+        <div class="tts-request-mode-btns">
+          <button :class="{ active: requestMode === 'chunked' }" @click="$emit('request-mode-change', 'chunked')">少字多请求</button>
+          <button :class="{ active: requestMode === 'merged' }" @click="$emit('request-mode-change', 'merged')">多字少请求</button>
+        </div>
+      </div>
       <div class="tts-tuning">
         <div class="tts-stepper">
           <span class="tts-label">语速</span>
@@ -96,6 +113,7 @@
           <button :class="{ active: stopAfterMinutes === 15 }" @click="$emit('timer-change', 15)">15分钟</button>
           <button :class="{ active: stopAfterMinutes === 30 }" @click="$emit('timer-change', 30)">30分钟</button>
           <button :class="{ active: stopAfterMinutes === 60 }" @click="$emit('timer-change', 60)">60分钟</button>
+          <button :class="{ active: stopAfterMinutes === 120 }" @click="$emit('timer-change', 120)">120分钟</button>
         </div>
         <div v-if="timerText" class="tts-timer-text">{{ timerText }}</div>
       </div>
@@ -104,8 +122,21 @@
 </template>
 
 <script setup lang="ts">
-import type { ThemePreset } from '../../stores/reader'
+import type { OpenAISpeechRequestMode, ThemePreset } from '../../stores/reader'
 import { MIMO_PRESET_VOICES } from '../../utils/mimoSpeech'
+
+const OPENAI_PRESET_VOICES = [
+  'alloy',
+  'ash',
+  'ballad',
+  'coral',
+  'echo',
+  'fable',
+  'nova',
+  'onyx',
+  'sage',
+  'shimmer',
+]
 
 defineProps<{
   show: boolean
@@ -118,6 +149,8 @@ defineProps<{
     model: string
     voice: string
   }
+  canUseServerSpeech?: boolean
+  requestMode?: OpenAISpeechRequestMode
   isSpeaking: boolean
   isLoading: boolean
   isPaused: boolean
@@ -147,6 +180,7 @@ defineEmits<{
   'mimo-voice-change': [value: string]
   'provider-change': [value: 'system' | 'server' | 'openai' | 'mimo']
   'source-change': [value: 'browser' | 'server']
+  'request-mode-change': [value: OpenAISpeechRequestMode]
   settings: []
   'rate-change': [delta: number]
   'pitch-change': [delta: number]
@@ -205,7 +239,7 @@ defineEmits<{
   justify-content: center;
   border: none;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(127, 127, 127, 0.14);
   color: inherit;
   cursor: pointer;
 }
@@ -228,7 +262,7 @@ defineEmits<{
   gap: 6px;
   padding: 4px;
   border-radius: 14px;
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(127, 127, 127, 0.12);
 }
 
 .tts-engine-switch button {
@@ -244,6 +278,11 @@ defineEmits<{
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tts-engine-switch button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .tts-engine-switch button.active {
@@ -267,9 +306,15 @@ defineEmits<{
   min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid var(--color-border, rgba(127, 127, 127, 0.24));
+  background: var(--color-bg-sunken, rgba(127, 127, 127, 0.14));
   color: inherit;
+  box-sizing: border-box;
+}
+
+.tts-voice-select option {
+  background: var(--color-bg-elevated, #fff);
+  color: var(--color-text, #111);
 }
 
 .tts-source-note {
@@ -277,11 +322,40 @@ defineEmits<{
   min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(127, 127, 127, 0.12);
   color: inherit;
   font-size: 13px;
-  opacity: 0.75;
+  opacity: 0.85;
   box-sizing: border-box;
+}
+
+.tts-request-mode {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tts-request-mode-btns {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.tts-request-mode-btns button {
+  border: 1px solid var(--color-border, rgba(127, 127, 127, 0.24));
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.1);
+  color: inherit;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tts-request-mode-btns button.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
 }
 
 .tts-tuning {
@@ -300,7 +374,7 @@ defineEmits<{
   gap: 8px;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(127, 127, 127, 0.12);
   font-size: 14px;
 }
 
@@ -332,9 +406,9 @@ defineEmits<{
 }
 
 .tts-timer-actions button {
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--color-border, rgba(127, 127, 127, 0.24));
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(127, 127, 127, 0.1);
   color: inherit;
   padding: 8px 12px;
   font-size: 13px;
@@ -368,7 +442,7 @@ defineEmits<{
   }
 
   .tts-engine-switch {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .tts-btns button {

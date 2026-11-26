@@ -10,8 +10,9 @@ use crate::api::{auth::AuthContext, AppState};
 use crate::error::error::{ApiResponse, AppError};
 use crate::model::ai_model::{AiModelKind, ResolvedAiModelEndpoint};
 use crate::model::ai_proxy::{
-    ai_proxy_timeout, build_ai_proxy_url, format_ai_proxy_upstream_error, ALLOWED_PROXY_PATHS,
-    validate_ai_proxy_image_url, AiProxyImageRequest, AiProxyRequest,
+    allow_private_proxy_hosts_from_env, build_ai_proxy_url, format_ai_proxy_upstream_error,
+    is_restricted_ip, validate_ai_proxy_image_url, validate_proxy_url_host, ALLOWED_PROXY_PATHS,
+    AiProxyImageRequest, AiProxyRequest,
 };
 
 const MAX_PROXY_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
@@ -22,16 +23,33 @@ pub async fn ai_proxy(
     Json(req): Json<AiProxyRequest>,
 ) -> Result<Response, AppError> {
     require_proxy_user(&state, &auth).await?;
+    let is_server_config = req.use_server_config;
     let (endpoint, kind, path, mut body) = resolve_ai_proxy_target(&state, &auth, req).await?;
     if let Some(kind) = kind {
         apply_server_model_body_defaults(&endpoint, kind, &mut body);
     }
     let target = build_ai_proxy_url(&endpoint.base_url, &path, endpoint.use_full_url)
         .map_err(AppError::BadRequest)?;
-    let client = ai_proxy_client()?;
+    let allow_private = is_server_config
+        || allow_private_proxy_hosts_from_env()
+        || is_proxy_admin(&state, &auth).await;
+    ensure_safe_proxy_target(&target, allow_private).await?;
+
+    let client = if allow_private {
+        &state.ai_proxy_client_allow_private
+    } else {
+        &state.ai_proxy_client
+    };
+    let accept_header = if path == "/v1/audio/speech"
+        || (kind == Some(AiModelKind::Speech) && !endpoint.is_mimo())
+    {
+        "*/*"
+    } else {
+        "application/json"
+    };
     let mut builder = client
         .post(target)
-        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::ACCEPT, accept_header)
         .json(&body);
 
     if let Some(api_key) = Some(endpoint.api_key.as_str())
@@ -245,7 +263,14 @@ pub async fn ai_proxy_image(
 ) -> Result<Response, AppError> {
     require_proxy_user(&state, &auth).await?;
     let target = validate_ai_proxy_image_url(&req.url).map_err(AppError::BadRequest)?;
-    let client = ai_proxy_client()?;
+    let allow_private =
+        allow_private_proxy_hosts_from_env() || is_proxy_admin(&state, &auth).await;
+    ensure_safe_proxy_target(&target, allow_private).await?;
+    let client = if allow_private {
+        &state.ai_proxy_client_allow_private
+    } else {
+        &state.ai_proxy_client
+    };
     let upstream = client
         .get(target)
         .header(reqwest::header::ACCEPT, "image/*,*/*;q=0.8")
@@ -322,11 +347,37 @@ fn build_upstream_error_response(status: reqwest::StatusCode, body: &bytes::Byte
     response
 }
 
-fn ai_proxy_client() -> Result<reqwest::Client, AppError> {
-    reqwest::Client::builder()
-        .timeout(ai_proxy_timeout())
-        .build()
-        .map_err(AppError::Http)
+async fn is_proxy_admin(state: &AppState, auth: &AuthContext) -> bool {
+    if !state.user_service.secure_enabled() {
+        return true;
+    }
+    state
+        .user_service
+        .is_admin(auth.access_token(), auth.secure_key())
+        .await
+        .unwrap_or(false)
+}
+
+async fn ensure_safe_proxy_target(target: &url::Url, allow_private: bool) -> Result<(), AppError> {
+    validate_proxy_url_host(target, allow_private).map_err(AppError::BadRequest)?;
+    if allow_private {
+        return Ok(());
+    }
+    let Some(host) = target.host_str() else {
+        return Err(AppError::BadRequest("代理目标缺少有效主机名".to_string()));
+    };
+    let port = target.port_or_known_default().unwrap_or(443);
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| AppError::BadRequest("无法解析代理目标域名".to_string()))?;
+    for addr in addrs {
+        if is_restricted_ip(addr.ip()) {
+            return Err(AppError::BadRequest(
+                "不允许通过代理访问内网或本机地址".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn map_ai_proxy_http_error(error: reqwest::Error) -> AppError {

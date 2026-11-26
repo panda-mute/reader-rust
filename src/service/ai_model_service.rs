@@ -107,6 +107,7 @@ mod tests {
         config.speech.provider = "mimo".to_string();
         config.speech.base_url = "https://api.xiaomimimo.com/v1/".to_string();
         config.speech.api_key = " mimo-key ".to_string();
+        config.speech.response_format.clear();
         config.speech.prompt = " 温柔坚定、稍慢 ".to_string();
 
         let saved = service.save(config).await.unwrap();

@@ -408,23 +408,20 @@ fn expand_range(len: usize, start: Option<i32>, end: Option<i32>, step: i32) -> 
 /// Select elements with Legado rule syntax
 pub fn select_list<'a>(doc: &'a Html, selector: &str) -> Vec<ElementRef<'a>> {
     let selector = selector.trim();
+    if selector.is_empty() {
+        return vec![];
+    }
 
-    // Split by @ first to get the base selector (handle @@ separately in text extraction)
+    // Strip @@ suffix (handled separately in text extraction)
     let sel_text = selector.split("@@").next().unwrap_or(selector).trim();
-    let split = split_top_level(sel_text, &["@"]);
-    let sel_text = split
-        .parts
-        .first()
-        .map(String::as_str)
-        .unwrap_or(sel_text)
-        .trim();
 
-    // Handle list combination operators at the top level
-    if sel_text.contains("&&") || sel_text.contains("||") || sel_text.contains("%%") {
+    // Handle list combination operators at the top level first
+    let combo = split_top_level(sel_text, &["&&", "||", "%%"]);
+    if combo.delimiter.is_some() {
         return select_with_combination(doc, sel_text);
     }
 
-    collect_matches(doc, &parse_selector_with_index(sel_text))
+    select_list_simple(doc, sel_text)
 }
 
 /// Handle list combination operators
@@ -471,9 +468,31 @@ fn select_with_combination<'a>(doc: &'a Html, rule: &str) -> Vec<ElementRef<'a>>
     result
 }
 
-/// Simple select without combination operators
+/// Simple select supporting chained `@` selectors without combination operators
 fn select_list_simple<'a>(doc: &'a Html, selector: &str) -> Vec<ElementRef<'a>> {
-    collect_matches(doc, &parse_selector_with_index(selector))
+    let parts = split_top_level(selector.trim(), &["@"]).parts;
+    let non_empty: Vec<&str> = parts
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if non_empty.is_empty() {
+        return vec![];
+    }
+
+    let mut current = collect_matches(doc, &parse_selector_with_index(non_empty[0]));
+    for part in non_empty.iter().skip(1) {
+        if current.is_empty() {
+            break;
+        }
+        let parsed = parse_selector_with_index(part);
+        let mut next = Vec::new();
+        for el in current {
+            next.extend(collect_matches_from_element(el, &parsed));
+        }
+        current = next;
+    }
+    current
 }
 
 /// Extract text from element with various Legado extractors
@@ -843,5 +862,18 @@ mod tests {
             Some("abc".to_string())
         );
         assert_eq!(select_text(&doc, "a@href"), Some("/book/1".to_string()));
+    }
+
+    #[test]
+    fn test_select_list_supports_chained_at_selectors() {
+        let doc = parse_document(
+            r#"<div class="result-list"><ul><li>Header</li><li>Book A</li><li>Book B</li></ul></div>"#,
+        );
+        let items = select_list(&doc, "class.result-list@tag.li!0");
+        let texts: Vec<String> = items
+            .iter()
+            .filter_map(|el| extract_text(el, "text"))
+            .collect();
+        assert_eq!(texts, vec!["Book A".to_string(), "Book B".to_string()]);
     }
 }

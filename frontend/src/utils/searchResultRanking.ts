@@ -66,3 +66,30 @@ export function rankSearchResults(
     return 0
   }).map(({ book }) => book)
 }
+
+export function aggregateSearchResults(rankedBooks: SearchBook[]): SearchBook[] {
+  const grouped = new Map<string, SearchBook>()
+  for (const book of rankedBooks) {
+    const title = normalizeTitle(book.name)
+    const author = normalizeText(book.author).replace(/^作者[:：]?/, '')
+    const key = title ? `${title}::${author}` : `${book.origin}::${book.bookUrl}`
+    const existing = grouped.get(key)
+    if (!existing) {
+      grouped.set(key, {
+        ...book,
+        bookSourceUrls: book.bookSourceUrls?.length ? [...book.bookSourceUrls] : [book.origin],
+      })
+      continue
+    }
+    const urls = existing.bookSourceUrls ? [...existing.bookSourceUrls] : [existing.origin]
+    if (!urls.includes(book.origin)) {
+      urls.push(book.origin)
+    }
+    existing.bookSourceUrls = urls
+    if (!existing.coverUrl && book.coverUrl) existing.coverUrl = book.coverUrl
+    if (!existing.intro && book.intro) existing.intro = book.intro
+    if (!existing.lastChapter && book.lastChapter) existing.lastChapter = book.lastChapter
+    if (!existing.updateTime && book.updateTime) existing.updateTime = book.updateTime
+  }
+  return Array.from(grouped.values())
+}

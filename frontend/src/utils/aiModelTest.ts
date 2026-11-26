@@ -1,6 +1,7 @@
 import { summarizeHttpErrorBody } from './httpError'
 import { requestMimoSpeechAudio } from './mimoSpeech'
 import { requestOpenAISpeechAudio } from './openaiSpeech'
+import { buildReaderAuthHeaders } from './secureAccess'
 
 /**
  * How a test request reaches the model:
@@ -49,14 +50,18 @@ export function describeModelRequestUrl(baseUrl: string, fullUrl: boolean, path:
   return fullUrl ? base : `${base}${path}`
 }
 
-export async function testTextModel(route: ModelRoute, endpoint: ModelEndpoint): Promise<ModelTestResult> {
+export async function testTextModel(
+  route: ModelRoute,
+  endpoint: ModelEndpoint,
+  externalSignal?: AbortSignal,
+): Promise<ModelTestResult> {
   ensureEndpoint(route, endpoint)
   const json = await runModelRequest(route, endpoint, 'text', '/v1/chat/completions', {
     model: endpoint.model.trim(),
     messages: [{ role: 'user', content: '这是一次连接测试，请只回复 OK。' }],
     max_tokens: 16,
     temperature: 0,
-  }, TEXT_TIMEOUT_MS)
+  }, TEXT_TIMEOUT_MS, externalSignal)
   const reply = readChatReply(json.data)
   return {
     elapsedMs: json.elapsedMs,
@@ -67,6 +72,7 @@ export async function testTextModel(route: ModelRoute, endpoint: ModelEndpoint):
 export async function testImageModel(
   route: ModelRoute,
   endpoint: ModelEndpoint & { size: string },
+  externalSignal?: AbortSignal,
 ): Promise<ModelTestResult> {
   ensureEndpoint(route, endpoint)
   const json = await runModelRequest(route, endpoint, 'image', '/v1/images/generations', {
@@ -74,7 +80,7 @@ export async function testImageModel(
     prompt: 'A minimal flat icon of an open book on a plain white background.',
     size: endpoint.size || '1024x1024',
     n: 1,
-  }, IMAGE_TIMEOUT_MS)
+  }, IMAGE_TIMEOUT_MS, externalSignal)
   const image = readImage(json.data)
   if (!image) {
     throw new Error('请求成功，但返回里没有图片数据，请检查模型是否支持图片生成')
@@ -82,10 +88,14 @@ export async function testImageModel(
   return { elapsedMs: json.elapsedMs, message: '连接正常，已生成测试图片', imageUrl: image }
 }
 
-export async function testSpeechModel(route: ModelRoute, params: SpeechTestParams): Promise<ModelTestResult> {
+export async function testSpeechModel(
+  route: ModelRoute,
+  params: SpeechTestParams,
+  externalSignal?: AbortSignal,
+): Promise<ModelTestResult> {
   ensureEndpoint(route, params)
   const started = now()
-  const { signal, done } = createTimeout(SPEECH_TIMEOUT_MS)
+  const { signal, done } = createTimeout(SPEECH_TIMEOUT_MS, externalSignal)
   const source = route === 'server' ? 'server' : route === 'proxy' ? 'proxy' : 'browser'
   try {
     const audio = params.engine === 'mimo'
@@ -115,6 +125,9 @@ export async function testSpeechModel(route: ModelRoute, params: SpeechTestParam
     if (!audio.size) throw new Error('请求成功，但返回的音频为空')
     return { elapsedMs: now() - started, message: '连接正常，正在播放测试语音', audio }
   } catch (error) {
+    if (externalSignal?.aborted) {
+      throw new Error('已取消测试')
+    }
     throw new Error(describeFailure(error, route, SPEECH_TIMEOUT_MS))
   } finally {
     done()
@@ -135,9 +148,10 @@ async function runModelRequest(
   path: ModelPath,
   body: Record<string, unknown>,
   timeoutMs: number,
+  externalSignal?: AbortSignal,
 ) {
   const started = now()
-  const { signal, done } = createTimeout(timeoutMs)
+  const { signal, done } = createTimeout(timeoutMs, externalSignal)
   try {
     const response = await postModel(route, endpoint, kind, path, body, signal)
     if (!response.ok) {
@@ -150,6 +164,9 @@ async function runModelRequest(
     }
     return { data, elapsedMs: now() - started }
   } catch (error) {
+    if (externalSignal?.aborted) {
+      throw new Error('已取消测试')
+    }
     throw new Error(describeFailure(error, route, timeoutMs))
   } finally {
     done()
@@ -218,7 +235,7 @@ function describeFailure(error: unknown, route: ModelRoute, timeoutMs: number) {
   }
   // fetch() rejects with a TypeError when the request never got a response (DNS, CORS, offline).
   if (err instanceof TypeError && route === 'direct') {
-    return '无法连接到模型服务：地址错误、网络不通，或被浏览器跨域限制。可以开启「使用后端代理调用模型」再试。'
+    return '无法连接到模型服务：地址错误、网络不通，或被浏览器跨域限制。可以开启「通过阅读服务器转发请求」再试。'
   }
   if (err instanceof TypeError) {
     return '无法连接到阅读服务器，请检查网络'
@@ -241,19 +258,28 @@ function readImage(data: Record<string, unknown>) {
   return first?.url || ''
 }
 
-function createTimeout(ms: number) {
+function createTimeout(ms: number, externalSignal?: AbortSignal) {
   const controller = new AbortController()
+  const onExternalAbort = () => controller.abort()
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort()
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+  }
   const timer = setTimeout(() => controller.abort(), ms)
-  return { signal: controller.signal, done: () => clearTimeout(timer) }
+  return {
+    signal: controller.signal,
+    done: () => {
+      clearTimeout(timer)
+      externalSignal?.removeEventListener('abort', onExternalAbort)
+    },
+  }
 }
 
 function readerAuthHeaders(): Record<string, string> {
-  try {
-    const token = localStorage.getItem('accessToken') || ''
-    return token ? { Authorization: token } : {}
-  } catch {
-    return {}
-  }
+  return buildReaderAuthHeaders()
 }
 
 function now() {

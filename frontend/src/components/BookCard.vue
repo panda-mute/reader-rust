@@ -64,8 +64,9 @@
         </button>
       </div>
 
-      <div v-if="isSearch && (sourceName || sourceGroup)" class="book-source-row">
+      <div v-if="isSearch && (sourceName || sourceGroup || sourceCount > 1)" class="book-source-row">
         <span v-if="sourceName" class="source-chip source-name">{{ sourceName }}</span>
+        <span v-if="sourceCount > 1" class="source-chip source-count">共 {{ sourceCount }} 源</span>
         <span v-if="sourceGroup" class="source-chip source-group">{{ sourceGroup }}</span>
       </div>
 
@@ -172,6 +173,10 @@ const sourceName = computed(() => {
 const sourceGroup = computed(() => {
   if (!props.isSearch) return ''
   return asSearchBook.value.originGroup || ''
+})
+const sourceCount = computed(() => {
+  if (!props.isSearch) return 0
+  return asSearchBook.value.bookSourceUrls?.length || 0
 })
 const showAiEntry = computed(() => {
   if (props.isSearch || props.editMode) return false
@@ -518,6 +523,12 @@ const showAiEntry = computed(() => {
 .source-name {
   background: rgba(201, 127, 58, 0.12);
   color: var(--color-primary);
+}
+
+.source-count {
+  background: rgba(47, 143, 91, 0.12);
+  color: var(--color-success, #2f8f5b);
+  font-weight: 600;
 }
 
 .source-group {

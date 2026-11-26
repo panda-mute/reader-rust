@@ -18,7 +18,7 @@ use crate::util::text::{normalize_source_url, repair_encoded_url};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::fs;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration, Instant};
@@ -42,7 +42,7 @@ pub struct BookService {
     cache: FileCache,
     storage_dir: PathBuf,
     source_cookies: Arc<RwLock<HashMap<String, String>>>,
-    rate_states: Arc<RwLock<HashMap<String, RateState>>>,
+    rate_states: Arc<Mutex<HashMap<String, RateState>>>,
 }
 
 #[derive(Clone, Default)]
@@ -50,6 +50,21 @@ struct RateState {
     in_flight: bool,
     last_start: Option<Instant>,
     window_starts: Vec<Instant>,
+}
+
+struct SerialRateGuard {
+    rate_states: Arc<Mutex<HashMap<String, RateState>>>,
+    source_key: String,
+}
+
+impl Drop for SerialRateGuard {
+    fn drop(&mut self) {
+        if let Ok(mut states) = self.rate_states.lock() {
+            if let Some(state) = states.get_mut(&self.source_key) {
+                state.in_flight = false;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -75,7 +90,7 @@ impl BookService {
             cache,
             storage_dir,
             source_cookies: Arc::new(RwLock::new(HashMap::new())),
-            rate_states: Arc::new(RwLock::new(HashMap::new())),
+            rate_states: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -128,11 +143,12 @@ impl BookService {
         url_rule: &str,
         base_url: &str,
     ) -> Result<FetchResponse, AppError> {
-        let mut spec = analyze_url(url_rule, "", 1, base_url, source)?;
+        let mut spec =
+            analyze_url_blocking(url_rule, "", 1, base_url, source).await?;
         self.apply_source_cookie(user_ns, source, &mut spec.headers)
             .await;
         let res = self.fetch_with_rate(source, spec).await?;
-        Ok(apply_login_check_js(source, res))
+        Ok(apply_login_check_js_blocking(source, res).await)
     }
 
     async fn fetch_with_rate(
@@ -140,36 +156,37 @@ impl BookService {
         source: &BookSource,
         spec: RequestSpec,
     ) -> anyhow::Result<FetchResponse> {
-        self.wait_for_rate(source).await;
-        let result = fetch(&self.http, spec).await;
-        self.finish_rate(source).await;
-        result
+        let _guard = self.wait_for_rate(source).await;
+        fetch(&self.http, spec).await
     }
 
-    async fn wait_for_rate(&self, source: &BookSource) {
-        let Some(rate) = source.concurrent_rate.as_deref().map(str::trim) else {
-            return;
-        };
+    async fn wait_for_rate(&self, source: &BookSource) -> Option<SerialRateGuard> {
+        let rate = source.concurrent_rate.as_deref().map(str::trim)?;
         if rate.is_empty() || rate == "0" {
-            return;
+            return None;
         }
         if let Some((limit, window_ms)) = parse_window_rate(rate) {
             self.wait_for_window_rate(&source.book_source_url, limit, window_ms)
                 .await;
-            return;
+            return None;
         }
         let Ok(delay_ms) = rate.parse::<u64>() else {
-            return;
+            return None;
         };
-        self.wait_for_serial_rate(&source.book_source_url, delay_ms)
-            .await;
+        Some(
+            self.wait_for_serial_rate(&source.book_source_url, delay_ms)
+                .await,
+        )
     }
 
-    async fn wait_for_serial_rate(&self, source_key: &str, delay_ms: u64) {
+    async fn wait_for_serial_rate(&self, source_key: &str, delay_ms: u64) -> SerialRateGuard {
         let delay = Duration::from_millis(delay_ms);
         loop {
             let wait = {
-                let mut states = self.rate_states.write().await;
+                let mut states = self
+                    .rate_states
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
                 let state = states.entry(source_key.to_string()).or_default();
                 let now = Instant::now();
                 if state.in_flight {
@@ -181,12 +198,18 @@ impl BookService {
                     } else {
                         state.in_flight = true;
                         state.last_start = Some(now);
-                        return;
+                        return SerialRateGuard {
+                            rate_states: self.rate_states.clone(),
+                            source_key: source_key.to_string(),
+                        };
                     }
                 } else {
                     state.in_flight = true;
                     state.last_start = Some(now);
-                    return;
+                    return SerialRateGuard {
+                        rate_states: self.rate_states.clone(),
+                        source_key: source_key.to_string(),
+                    };
                 }
             };
             sleep(wait).await;
@@ -200,7 +223,10 @@ impl BookService {
         let window = Duration::from_millis(window_ms);
         loop {
             let wait = {
-                let mut states = self.rate_states.write().await;
+                let mut states = self
+                    .rate_states
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
                 let state = states.entry(source_key.to_string()).or_default();
                 let now = Instant::now();
                 state
@@ -218,13 +244,6 @@ impl BookService {
                 }
             };
             sleep(wait).await;
-        }
-    }
-
-    async fn finish_rate(&self, source: &BookSource) {
-        let mut states = self.rate_states.write().await;
-        if let Some(state) = states.get_mut(&source.book_source_url) {
-            state.in_flight = false;
         }
     }
 
@@ -246,11 +265,13 @@ impl BookService {
             page,
             search_url
         );
-        let mut spec = analyze_url(&search_url, key, page, &source.book_source_url, source)
-            .map_err(|e| {
-                tracing::error!("analyze_url failed: {:?}", e);
-                e
-            })?;
+        let mut spec =
+            analyze_url_blocking(&search_url, key, page, &source.book_source_url, source)
+                .await
+                .map_err(|e| {
+                    tracing::error!("analyze_url failed: {:?}", e);
+                    e
+                })?;
 
         self.apply_source_cookie(user_ns, source, &mut spec.headers)
             .await;
@@ -260,9 +281,17 @@ impl BookService {
             tracing::error!("fetch failed: {:?}", e);
             e
         })?;
-        let res = apply_login_check_js(source, res);
+        let res = apply_login_check_js_blocking(source, res).await;
         tracing::debug!("fetch success, body length: {}", res.body.len());
-        let books = self.parser.search_books(source, &res.body, &res.url);
+        let parser = self.parser.clone();
+        let source_clone = source.clone();
+        let body = res.body;
+        let final_url = res.url;
+        let books = tokio::task::spawn_blocking(move || {
+            parser.search_books(&source_clone, &body, &final_url)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
         tracing::info!("found {} books", books.len());
         Ok(books)
     }
@@ -277,13 +306,21 @@ impl BookService {
         if rule_find_url.trim().is_empty() {
             return Err(AppError::BadRequest("ruleFindUrl required".to_string()));
         }
-        let mut spec = analyze_url(rule_find_url, "", page, &source.book_source_url, source)?;
+        let mut spec =
+            analyze_url_blocking(rule_find_url, "", page, &source.book_source_url, source).await?;
 
         self.apply_source_cookie(user_ns, source, &mut spec.headers)
             .await;
 
-        let res = apply_login_check_js(source, self.fetch_with_rate(source, spec).await?);
-        Ok(self.parser.explore_books(source, &res.body, &res.url))
+        let res =
+            apply_login_check_js_blocking(source, self.fetch_with_rate(source, spec).await?).await;
+        let parser = self.parser.clone();
+        let source_clone = source.clone();
+        let body = res.body;
+        let final_url = res.url;
+        tokio::task::spawn_blocking(move || parser.explore_books(&source_clone, &body, &final_url))
+            .await
+            .map_err(|e| AppError::Internal(e.into()))
     }
 
     pub fn explore_kinds(&self, source: &BookSource) -> Result<Vec<ExploreKind>, AppError> {
@@ -1313,6 +1350,45 @@ impl BookService {
     }
 }
 
+async fn analyze_url_blocking(
+    url_rule: &str,
+    key: &str,
+    page: i32,
+    base_url: &str,
+    source: &BookSource,
+) -> Result<RequestSpec, AppError> {
+    let url_rule = url_rule.to_string();
+    let key = key.to_string();
+    let base_url = base_url.to_string();
+    let source = source.clone();
+    tokio::task::spawn_blocking(move || analyze_url(&url_rule, &key, page, &base_url, &source))
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?
+}
+
+async fn apply_login_check_js_blocking(source: &BookSource, res: FetchResponse) -> FetchResponse {
+    if source
+        .login_check_js
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return res;
+    }
+    let source = source.clone();
+    tokio::task::spawn_blocking(move || apply_login_check_js(&source, res))
+        .await
+        .unwrap_or_else(|_| FetchResponse {
+            url: String::new(),
+            status: 500,
+            body: String::new(),
+            content_type: None,
+            headers: Vec::new(),
+            is_successful: false,
+        })
+}
+
 fn apply_login_check_js(source: &BookSource, res: FetchResponse) -> FetchResponse {
     let Some(script) = source
         .login_check_js
@@ -1697,7 +1773,7 @@ mod tests {
             storage_dir.to_str().unwrap(),
         );
         let now = Instant::now();
-        service.rate_states.write().await.insert(
+        service.rate_states.lock().unwrap().insert(
             "source".to_string(),
             RateState {
                 window_starts: vec![now, now],
@@ -1713,5 +1789,23 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(&storage_dir).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn serial_rate_guard_releases_in_flight_on_drop() {
+        let storage_dir =
+            std::env::temp_dir().join(format!("reader-rust-serial-rate-{}", std::process::id()));
+        let service = BookService::new(
+            HttpClient::new(5, None).unwrap(),
+            RuleEngine::new().unwrap(),
+            FileCache::new(storage_dir.join("cache")),
+            storage_dir.to_str().unwrap(),
+        );
+        {
+            let _guard = service.wait_for_serial_rate("source-a", 10).await;
+            assert!(service.rate_states.lock().unwrap()["source-a"].in_flight);
+        }
+        assert!(!service.rate_states.lock().unwrap()["source-a"].in_flight);
+        let _ = tokio::fs::remove_dir_all(&storage_dir).await;
     }
 }

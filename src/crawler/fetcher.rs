@@ -96,12 +96,12 @@ pub async fn fetch(client: &HttpClient, req: RequestSpec) -> anyhow::Result<Fetc
                     "application/x-www-form-urlencoded",
                 );
             }
-            println!("DEBUG: fetch sending body: {}", body);
+            tracing::debug!("fetch sending POST body ({} bytes)", body.len());
             builder = builder.body(body);
         }
 
-        println!(
-            "DEBUG: fetch executing {} request to: {}",
+        tracing::debug!(
+            "fetch executing {} request to: {}",
             match req.method {
                 HttpMethod::GET => "GET",
                 HttpMethod::POST => "POST",
@@ -111,7 +111,7 @@ pub async fn fetch(client: &HttpClient, req: RequestSpec) -> anyhow::Result<Fetc
         match builder.send().await {
             Ok(res) => {
                 let status = res.status().as_u16();
-                println!("DEBUG: fetch response status: {}", status);
+                tracing::debug!("fetch response status: {} for {}", status, req.url);
                 let is_successful = res.status().is_success();
                 let url = res.url().to_string();
                 let content_type = res

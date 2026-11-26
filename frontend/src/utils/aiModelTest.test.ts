@@ -79,7 +79,20 @@ describe('AI model connection tests', () => {
   it('suggests the proxy when the browser cannot reach the model', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
 
-    await expect(testTextModel('direct', endpoint)).rejects.toThrow('使用后端代理调用模型')
+    await expect(testTextModel('direct', endpoint)).rejects.toThrow('通过阅读服务器转发请求')
+  })
+
+  it('attaches X-Secure-Key header when present in localStorage', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => (key === 'accessToken' ? 'reader-token' : key === 'secureKey' ? 'admin-secret' : null),
+    })
+    fetchMock.mockResolvedValue(jsonResponse({ choices: [{ message: { content: 'OK' } }] }))
+
+    await testTextModel('server', { baseUrl: '', apiKey: '', model: '', fullUrl: false })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.headers.Authorization).toBe('reader-token')
+    expect(init.headers['X-Secure-Key']).toBe('admin-secret')
   })
 
   it('validates the form before sending anything', async () => {

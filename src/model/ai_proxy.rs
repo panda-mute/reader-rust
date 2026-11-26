@@ -1,8 +1,9 @@
 use crate::model::ai_model::AiModelKind;
 use serde::Deserialize;
 use serde_json::Value;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
-use url::Url;
+use url::{Host, Url};
 
 const AI_PROXY_TIMEOUT_SECS: u64 = 300;
 pub const ALLOWED_PROXY_PATHS: [&str; 3] = [
@@ -50,6 +51,80 @@ pub fn build_ai_proxy_url(base_url: &str, path: &str, full_url: bool) -> Result<
 
 pub fn validate_ai_proxy_image_url(url: &str) -> Result<Url, String> {
     parse_http_url(url)
+}
+
+pub fn allow_private_proxy_hosts_from_env() -> bool {
+    std::env::var("AI_PROXY_ALLOW_PRIVATE_HOSTS")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+pub fn is_restricted_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_restricted_ipv4(v4),
+        IpAddr::V6(v6) => is_restricted_ipv6(v6),
+    }
+}
+
+fn is_restricted_ipv4(v4: Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_documentation()
+        || v4.is_unspecified()
+        || v4.is_multicast()
+        // Shared Address Space (CGNAT) 100.64.0.0/10
+        || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
+}
+
+fn is_restricted_ipv6(v6: Ipv6Addr) -> bool {
+    if let Some(mapped) = v6.to_ipv4_mapped() {
+        return is_restricted_ipv4(mapped);
+    }
+    let seg0 = v6.segments()[0];
+    v6.is_loopback()
+        || v6.is_unspecified()
+        || v6.is_multicast()
+        // Unique local addresses fc00::/7
+        || (seg0 & 0xfe00) == 0xfc00
+        // Link-local fe80::/10
+        || (seg0 & 0xffc0) == 0xfe80
+}
+
+pub fn validate_proxy_url_host(url: &Url, allow_private: bool) -> Result<(), String> {
+    if allow_private {
+        return Ok(());
+    }
+    let Some(host) = url.host() else {
+        return Err("代理目标缺少有效主机名".to_string());
+    };
+    match host {
+        Host::Ipv4(ip) => {
+            if is_restricted_ipv4(ip) {
+                return Err("不允许通过代理访问内网或本机地址".to_string());
+            }
+        }
+        Host::Ipv6(ip) => {
+            if is_restricted_ipv6(ip) {
+                return Err("不允许通过代理访问内网或本机地址".to_string());
+            }
+        }
+        Host::Domain(domain) => {
+            let lower = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+            if lower == "localhost"
+                || lower.ends_with(".localhost")
+                || lower.ends_with(".local")
+                || lower.ends_with(".internal")
+                || lower == "metadata.google.internal"
+            {
+                return Err("不允许通过代理访问内网或本机地址".to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn ai_proxy_timeout() -> Duration {
@@ -116,4 +191,35 @@ fn truncate_error_detail(value: &str) -> String {
     let mut result = cleaned.chars().take(240).collect::<String>();
     result.push('…');
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_loopback_private_and_metadata_targets_by_default() {
+        for blocked in [
+            "http://127.0.0.1:8080/v1/chat/completions",
+            "http://localhost:8825/v1/audio/speech",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/api",
+            "http://192.168.1.5:11434/v1/chat/completions",
+            "http://[::1]:8080/test",
+            "http://host.docker.internal:8880/v1/audio/speech",
+        ] {
+            let url = Url::parse(blocked).unwrap();
+            assert!(
+                validate_proxy_url_host(&url, false).is_err(),
+                "expected {blocked} to be blocked"
+            );
+            assert!(
+                validate_proxy_url_host(&url, true).is_ok(),
+                "expected {blocked} to be allowed when allow_private=true"
+            );
+        }
+
+        let public_url = Url::parse("https://api.openai.com/v1/chat/completions").unwrap();
+        assert!(validate_proxy_url_host(&public_url, false).is_ok());
+    }
 }

@@ -19,12 +19,18 @@ export function toRssSourceDeletePayload(sources: Pick<RssSource, 'sourceName' |
   }))
 }
 
+export function splitBookSourceGroups(raw?: string) {
+  return (raw || '')
+    .split(/[,，;；、|/]/)
+    .map((group) => group.trim())
+    .filter(Boolean)
+}
+
 export function getBookSourceGroups(sources: Pick<BookSource, 'bookSourceGroup'>[]) {
   const groups = new Set<string>()
   sources.forEach((source) => {
-    source.bookSourceGroup?.split(/[,;；、]/).forEach((group) => {
-      const trimmed = group.trim()
-      if (trimmed) groups.add(trimmed)
+    splitBookSourceGroups(source.bookSourceGroup).forEach((group) => {
+      groups.add(group)
     })
   })
   return Array.from(groups).sort()
@@ -40,7 +46,7 @@ export function filterBookSources(
     const matchesText = !keyword
       || source.bookSourceName.toLowerCase().includes(keyword)
       || source.bookSourceUrl.toLowerCase().includes(keyword)
-    const matchesGroup = !filterGroup || source.bookSourceGroup?.includes(filterGroup)
+    const matchesGroup = !filterGroup || splitBookSourceGroups(source.bookSourceGroup).includes(filterGroup)
     return matchesText && matchesGroup
   })
 }

@@ -21,6 +21,8 @@ static JS_LIB_CACHE: Lazy<Mutex<HashMap<String, String>>> =
 static JS_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
         .cookie_store(true)
+        .timeout(std::time::Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(8))
         .gzip(true)
         .brotli(true)
         .deflate(true)

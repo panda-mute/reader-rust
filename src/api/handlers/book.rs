@@ -2,6 +2,10 @@ use crate::api::auth::AuthContext;
 use crate::api::AppState;
 use crate::error::error::{ApiResponse, AppError};
 use crate::model::{book::Book, book_source::BookSource, search::SearchBook};
+use crate::service::book_source_service::{
+    book_source_has_group, is_searchable_source, sort_sources_for_search,
+    INVALID_BOOK_SOURCE_GROUP,
+};
 use crate::service::local_epub_book::{
     is_local_epub_origin, is_local_epub_url, LOCAL_EPUB_ORIGIN, MAX_EPUB_UPLOAD_BYTES,
 };
@@ -287,34 +291,49 @@ pub async fn search_book_multi(
         .ok_or_else(|| AppError::BadRequest("key required".to_string()))?;
     let page = req.page.unwrap_or(1);
 
-    let sources = if let Some(urls) = req.book_source_urls {
+    let mut sources = if let Some(urls) = req.book_source_urls {
         let mut out = Vec::new();
         for url in urls {
             if let Some(s) = state.book_source_service.get(&user_ns, &url).await? {
-                out.push(s);
+                if is_searchable_source(&s, true, true) {
+                    out.push(s);
+                }
             }
         }
         out
     } else {
         let mut list = state.book_source_service.list(&user_ns).await?;
+        let allow_invalid = req
+            .book_source_group
+            .as_deref()
+            .is_some_and(|g| g.trim() == INVALID_BOOK_SOURCE_GROUP);
+        let allow_non_text = req
+            .book_source_group
+            .as_deref()
+            .is_some_and(|g| !g.trim().is_empty());
         if let Some(ref group) = req.book_source_group {
-            list.retain(|s| s.book_source_group.as_deref().unwrap_or("").contains(group));
+            list.retain(|s| book_source_has_group(s, group));
         }
+        list.retain(|s| is_searchable_source(s, allow_non_text, allow_invalid));
         list
     };
+    sort_sources_for_search(&mut sources);
 
-    let mut tasks = Vec::new();
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(24));
+    let mut tasks = JoinSet::new();
     for source in sources {
         let svc = state.book_service.clone();
         let k = key.clone();
         let user_ns = user_ns.clone();
-        tasks.push(tokio::spawn(async move {
-            svc.search_book(&user_ns, &source, &k, page).await
-        }));
+        let sem = sem.clone();
+        tasks.spawn(async move {
+            let _permit = sem.acquire_owned().await.ok()?;
+            svc.search_book(&user_ns, &source, &k, page).await.ok()
+        });
     }
     let mut results: Vec<crate::model::search::SearchBook> = Vec::new();
-    for t in tasks {
-        if let Ok(Ok(list)) = t.await {
+    while let Some(res) = tasks.join_next().await {
+        if let Ok(Some(list)) = res {
             results.extend(list);
         }
     }
@@ -1826,13 +1845,17 @@ pub async fn cache_book_sse(
     Ok(Sse::new(ReceiverStream::new(rx).map(Ok::<_, Infallible>)))
 }
 
-fn search_title(title: &str) -> &str {
-    let title = title.trim();
-    title
+fn search_title(title: &str) -> String {
+    let trimmed = title.trim();
+    let stripped = trimmed
         .strip_prefix('《')
-        .and_then(|title| title.strip_suffix('》'))
-        .unwrap_or(title)
-        .trim()
+        .and_then(|value| value.strip_suffix('》'))
+        .unwrap_or(trimmed);
+    stripped
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 struct SearchResultLimit {
@@ -1909,7 +1932,20 @@ pub async fn search_book_multi_sse(
 
         let sources = if let Some(url) = book_source_url {
             match state_clone.book_source_service.get(&user_ns, &url).await {
-                Ok(Some(s)) => vec![s],
+                Ok(Some(s)) if is_searchable_source(&s, true, true) => vec![s],
+                Ok(Some(_)) => {
+                    let _ = tx
+                        .send(
+                            Event::default()
+                                .event("error")
+                                .data(json_err("所选书源已停用或未配置搜索规则")),
+                        )
+                        .await;
+                    let _ = tx
+                        .send(Event::default().event("end").data(json_end(last_index)))
+                        .await;
+                    return;
+                }
                 _ => {
                     let _ = tx
                         .send(Event::default().event("error").data(json_err("未配置书源")))
@@ -1923,17 +1959,21 @@ pub async fn search_book_multi_sse(
         } else {
             match state_clone.book_source_service.list(&user_ns).await {
                 Ok(mut list) => {
+                    let allow_invalid = book_source_group
+                        .as_deref()
+                        .is_some_and(|g| g.trim() == INVALID_BOOK_SOURCE_GROUP);
+                    let allow_non_text = book_source_group.is_some();
                     if let Some(ref group) = book_source_group {
-                        list.retain(|s| {
-                            s.book_source_group.as_deref().unwrap_or("").contains(group)
-                        });
+                        list.retain(|s| book_source_has_group(s, group));
                     }
+                    list.retain(|s| is_searchable_source(s, allow_non_text, allow_invalid));
+                    sort_sources_for_search(&mut list);
                     if list.is_empty() {
                         let _ = tx
                             .send(
                                 Event::default()
                                     .event("error")
-                                    .data(json_err("未配置书源或分组为空")),
+                                    .data(json_err("没有可用的搜索书源或当前分组为空")),
                             )
                             .await;
                         let _ = tx
@@ -1955,6 +1995,8 @@ pub async fn search_book_multi_sse(
             }
         };
 
+        let total_sources = sources.len();
+        let mut searched_count = 0usize;
         let mut idx = last_index + 1;
         let mut limit = SearchResultLimit {
             seen: Default::default(),
@@ -1962,36 +2004,36 @@ pub async fn search_book_multi_sse(
             size: search_size,
             prioritize_exact,
         };
-        let mut tasks: FuturesUnordered<_> = FuturesUnordered::new();
+        let mut tasks = JoinSet::new();
 
-        while (idx as usize) < sources.len() || !tasks.is_empty() {
-            if !limit.should_stop() && tasks.len() < concurrent && (idx as usize) < sources.len() {
+        while (idx as usize) < total_sources || !tasks.is_empty() {
+            if !limit.should_stop() && tasks.len() < concurrent && (idx as usize) < total_sources {
                 let source = sources[idx as usize].clone();
                 let cur_idx = idx;
                 idx += 1;
-                if source.enabled == Some(false)
-                    || !source
-                        .search_url
-                        .as_deref()
-                        .is_some_and(|url| !url.trim().is_empty())
-                {
-                    continue;
-                }
                 let svc = state_clone.book_service.clone();
                 let k = key.clone();
                 let user_ns_value = user_ns.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.spawn(async move {
                     let res = svc.search_book(&user_ns_value, &source, &k, 1).await;
                     (cur_idx, source.book_source_name, res)
-                }));
+                });
                 continue;
             }
 
+            if tasks.is_empty() {
+                break;
+            }
+
             let next = tokio::select! {
-                next = tasks.next() => next,
-                _ = tx.closed() => return,
+                next = tasks.join_next() => next,
+                _ = tx.closed() => {
+                    tasks.abort_all();
+                    return;
+                }
             };
             if let Some(res) = next {
+                searched_count += 1;
                 match res {
                     Ok((cur_idx, _, Ok(list))) => {
                         let batch: Vec<_> = list
@@ -1999,24 +2041,47 @@ pub async fn search_book_multi_sse(
                             .filter(|book| limit.accept(&key, book))
                             .collect();
                         if !batch.is_empty() {
-                            let payload = serde_json::json!({"lastIndex": cur_idx, "data": batch});
+                            let payload = serde_json::json!({
+                                "lastIndex": cur_idx,
+                                "searchedCount": searched_count,
+                                "totalSources": total_sources,
+                                "data": batch
+                            });
                             if tx.send(Event::default().data(payload.to_string())).await.is_err() {
+                                tasks.abort_all();
+                                return;
+                            }
+                        } else if searched_count % 8 == 0 || searched_count == total_sources {
+                            let payload = serde_json::json!({
+                                "lastIndex": cur_idx,
+                                "searchedCount": searched_count,
+                                "totalSources": total_sources,
+                                "data": []
+                            });
+                            if tx.send(Event::default().data(payload.to_string())).await.is_err() {
+                                tasks.abort_all();
                                 return;
                             }
                         }
                     }
                     Ok((_, source_name, Err(error))) => {
-                        tracing::error!("search_book error from {}: {:?}", source_name, error);
+                        tracing::debug!("search_book error from {}: {:?}", source_name, error);
                     }
-                    Err(error) => tracing::error!("task join error: {:?}", error),
+                    Err(error) => tracing::debug!("task join error: {:?}", error),
                 }
             } else {
                 break;
             }
         }
 
+        tasks.abort_all();
+        let end_payload = serde_json::json!({
+            "lastIndex": idx - 1,
+            "searchedCount": searched_count,
+            "totalSources": total_sources
+        });
         let _ = tx
-            .send(Event::default().event("end").data(json_end(idx - 1)))
+            .send(Event::default().event("end").data(end_payload.to_string()))
             .await;
     });
 
@@ -2085,14 +2150,16 @@ pub async fn search_book_source_sse(
         let sources = match state_clone.book_source_service.list(&user_ns).await {
             Ok(mut list) => {
                 if let Some(ref group) = book_source_group {
-                    list.retain(|s| s.book_source_group.as_deref().unwrap_or("").contains(group));
+                    list.retain(|s| book_source_has_group(s, group));
                 }
+                list.retain(|s| is_searchable_source(s, false, false));
+                sort_sources_for_search(&mut list);
                 if list.is_empty() {
                     let _ = tx
                         .send(
                             Event::default()
                                 .event("error")
-                                .data(json_err("未配置书源或分组为空")),
+                                .data(json_err("未配置可用书源或分组为空")),
                         )
                         .await;
                     let _ = tx
@@ -2116,7 +2183,7 @@ pub async fn search_book_source_sse(
         let mut idx = last_index + 1;
         let mut last_idx = last_index;
         let mut total = 0usize;
-        let mut tasks: FuturesUnordered<_> = FuturesUnordered::new();
+        let mut tasks = JoinSet::new();
         let mut all_results: Vec<crate::model::search::SearchBook> = Vec::new();
 
         while (idx as usize) < sources.len() || !tasks.is_empty() {
@@ -2127,31 +2194,40 @@ pub async fn search_book_source_sse(
                 let target_author = book.author.clone();
                 let cur_idx = idx;
                 let user_ns_value = user_ns.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.spawn(async move {
                     let res = svc
                         .search_book(&user_ns_value, &source, &target_name, 1)
                         .await;
                     (cur_idx, res, target_name, target_author)
-                }));
+                });
                 last_idx = idx;
                 idx += 1;
             }
 
-            if let Some(res) = tasks.next().await {
+            let next = tokio::select! {
+                next = tasks.join_next() => next,
+                _ = tx.closed() => {
+                    tasks.abort_all();
+                    return;
+                }
+            };
+            if let Some(res) = next {
                 if let Ok((cur_idx, Ok(list), target_name, target_author)) = res {
-                    let mut batch = Vec::new();
-                    for b in list {
-                        if b.name == target_name && b.author == target_author {
-                            batch.push(b);
-                        }
-                    }
+                    let batch: Vec<_> = list
+                        .into_iter()
+                        .filter(|b| available_source_matches_target(b, &target_name, &target_author))
+                        .collect();
                     if !batch.is_empty() {
                         total += batch.len();
                         all_results.extend(batch.clone());
                         let payload = serde_json::json!({"lastIndex": cur_idx, "data": batch});
-                        let _ = tx.send(Event::default().data(payload.to_string())).await;
+                        if tx.send(Event::default().data(payload.to_string())).await.is_err() {
+                            tasks.abort_all();
+                            return;
+                        }
                     }
                     if total >= search_size {
+                        tasks.abort_all();
                         break;
                     }
                 }
@@ -2237,7 +2313,9 @@ pub async fn get_available_book_source(
     let book = book.or_else(|| fallback_available_book(&req));
 
     let book = book.ok_or_else(|| AppError::BadRequest("书籍信息错误".to_string()))?;
-    let sources = state.book_source_service.list(&user_ns).await?;
+    let mut sources = state.book_source_service.list(&user_ns).await?;
+    sources.retain(|s| is_searchable_source(s, false, false));
+    sort_sources_for_search(&mut sources);
     if sources.is_empty() {
         if paged_request {
             return Ok(Json(ApiResponse::ok(
@@ -2418,7 +2496,9 @@ pub async fn get_available_book_source_sse(
         }
     }
 
-    let sources = state.book_source_service.list(&user_ns).await?;
+    let mut sources = state.book_source_service.list(&user_ns).await?;
+    sources.retain(|s| is_searchable_source(s, false, false));
+    sort_sources_for_search(&mut sources);
     let state_clone = state.clone();
     tokio::spawn(async move {
         if sources.is_empty() {
@@ -2434,7 +2514,8 @@ pub async fn get_available_book_source_sse(
         }
 
         let mut next_index = (last_index_start + 1).max(0) as usize;
-        let mut last_idx = last_index_start;
+        let mut contiguous_last_idx = last_index_start;
+        let mut completed_indices = std::collections::BTreeSet::<i32>::new();
         let mut emitted = 0usize;
         let mut all_results: Vec<SearchBook> = Vec::new();
         let mut seen = std::collections::HashSet::<String>::new();
@@ -2464,9 +2545,19 @@ pub async fn get_available_book_source_sse(
                 break;
             }
 
-            match tasks.join_next().await {
+            let joined = tokio::select! {
+                joined = tasks.join_next() => joined,
+                _ = tx.closed() => {
+                    tasks.abort_all();
+                    return;
+                }
+            };
+            match joined {
                 Some(Ok((source_index, search_result, target_name, target_author))) => {
-                    last_idx = last_idx.max(source_index);
+                    completed_indices.insert(source_index);
+                    while completed_indices.remove(&(contiguous_last_idx + 1)) {
+                        contiguous_last_idx += 1;
+                    }
                     match search_result {
                         Ok(list) => {
                             let matches = take_available_source_sse_matches(
@@ -2481,7 +2572,7 @@ pub async fn get_available_book_source_sse(
                                 emitted += 1;
                                 all_results.push(book.clone());
                                 let payload = serde_json::json!({
-                                    "lastIndex": source_index,
+                                    "lastIndex": contiguous_last_idx,
                                     "hasMore": next_index < sources.len() || !tasks.is_empty(),
                                     "data": [book]
                                 });
@@ -2519,9 +2610,9 @@ pub async fn get_available_book_source_sse(
             tasks.abort_all();
         }
         let final_last_idx = if has_more {
-            last_idx.max(next_index as i32 - 1)
+            contiguous_last_idx
         } else {
-            last_idx
+            (sources.len() as i32) - 1
         };
 
         if !has_more && last_index_start < 0 {

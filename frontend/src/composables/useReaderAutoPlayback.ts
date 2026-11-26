@@ -179,7 +179,7 @@ export function useReaderAutoPlayback(
     if (!currentText) {
       return {
         text: '',
-        nextParagraph: getNextParagraph(),
+        nextParagraph: getNextParagraphFrom(paragraph),
       }
     }
 
@@ -188,7 +188,7 @@ export function useReaderAutoPlayback(
     if (startIndex < 0) {
       return {
         text: currentText,
-        nextParagraph: getNextParagraph(),
+        nextParagraph: getNextParagraphFrom(paragraph),
       }
     }
 
@@ -246,7 +246,7 @@ export function useReaderAutoPlayback(
     }
 
     const paragraphChunks = buildParagraphSpeechChunks(paragraph)
-    const nextParagraph = getNextParagraph()
+    const nextParagraph = getNextParagraphFrom(paragraph)
     return paragraphChunks.map((text, index) => ({
       text,
       nextParagraph: index < paragraphChunks.length - 1 ? paragraph : nextParagraph,
@@ -522,9 +522,9 @@ export function useReaderAutoPlayback(
     })
     if (!current?.innerText.trim()) {
       if (interruptCurrent) {
-        speechNext()
+        speechNext(getNextParagraphFrom(current))
       } else {
-        continueSpeechTarget(getNextParagraph())
+        continueSpeechTarget(getNextParagraphFrom(current))
       }
       return
     }

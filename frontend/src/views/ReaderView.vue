@@ -23,7 +23,7 @@
             :initial-tab="store.activePanel === 'bookmark' ? 'bookmarks' : 'chapters'"
             @jump-chapter="jumpFromCatalog"
           />
-          <ReadSettings v-else-if="store.activePanel === 'settings'" />
+          <ReadSettings v-else-if="store.activePanel === 'settings'" @open-tts="handleTTS" />
           <ReaderBookshelf v-else-if="store.activePanel === 'bookshelf'" />
           <ReaderSource v-else-if="store.activePanel === 'source'" />
           <ReplaceRuleManager v-else-if="store.activePanel === 'rule'" />
@@ -78,6 +78,8 @@
       :provider-label="store.speechProviderLabel"
       :server-provider="store.serverSpeechProvider"
       :server-speech-config="store.serverSpeechConfig"
+      :can-use-server-speech="canUseServerSpeech"
+      :request-mode="currentSpeechRequestMode"
       :is-speaking="store.isSpeaking"
       :is-loading="store.isSpeechLoading"
       :is-paused="store.isPaused"
@@ -104,6 +106,7 @@
       @mimo-voice-change="changeMimoVoice"
       @provider-change="changeSpeechProvider"
       @source-change="changeSpeechSource"
+      @request-mode-change="changeSpeechRequestMode"
       @settings="closeTTSPanel(); store.openPanel('settings')"
       @rate-change="adjustSpeechRate"
       @pitch-change="adjustSpeechPitch"
@@ -285,8 +288,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
-import { useReaderStore, fontPresets } from '../stores/reader'
+import { useReaderStore, fontPresets, type OpenAISpeechRequestMode } from '../stores/reader'
 import { useAppStore } from '../stores/app'
+import { useAiBookStore } from '../stores/aiBook'
 import { getBookInfo, withAuthQuery } from '../api/bookshelf'
 import { applySystemTheme } from '../utils/systemUi'
 import { countBrowserBookCache } from '../utils/browserCache'
@@ -317,6 +321,19 @@ const ReaderSearchPanel = defineAsyncComponent(() => import('../components/reade
 const router = useRouter()
 const store = useReaderStore()
 const appStore = useAppStore()
+const aiBookStore = useAiBookStore()
+
+const canUseServerSpeech = computed(() => Boolean(
+  (aiBookStore.serverModelConfig?.canUseServerModel || aiBookStore.serverModelConfig?.isAdmin)
+  && store.serverSpeechConfig?.enabled,
+))
+
+const currentSpeechRequestMode = computed<OpenAISpeechRequestMode>(() => {
+  if (store.speechConfig.provider === 'mimo' || (store.speechConfig.provider === 'server' && store.serverSpeechProvider === 'mimo')) {
+    return store.speechConfig.mimoRequestMode
+  }
+  return store.speechConfig.openaiRequestMode
+})
 const READER_POSITION_PREFIX = 'reader-position:'
 const SERVER_PROGRESS_AUTOSAVE_MS = 10000
 
@@ -1555,7 +1572,7 @@ function closeTTSPanel() {
 async function changeSpeechProvider(provider: 'system' | 'server' | 'openai' | 'mimo') {
   if (provider === 'server') {
     const serverConfig = await store.loadServerSpeechConfig()
-    if (!serverConfig?.canUseServerModel) {
+    if (!(serverConfig?.canUseServerModel || serverConfig?.isAdmin)) {
       appStore.showToast('当前账号没有使用后端模型配置的权限', 'warning')
       return
     }
@@ -1578,20 +1595,39 @@ async function changeSpeechProvider(provider: 'system' | 'server' | 'openai' | '
 }
 
 async function changeSpeechSource(source: 'browser' | 'server') {
+  const wasSpeaking = store.isSpeaking || store.isSpeechLoading
   if (source === 'server') {
     const result = await store.loadServerSpeechConfig()
-    if (!result?.canUseServerModel || !result.config.speech.enabled) {
+    if (!(result?.canUseServerModel || result?.isAdmin) || !result.config.speech.enabled) {
       appStore.showToast('后端语音未启用或当前账号没有使用权限', 'warning')
       return
     }
+  }
+  if (wasSpeaking) {
     cancelSpeechTransition()
     store.stopTTS(false)
+  }
+  if (source === 'server') {
     store.setSpeechProvider(store.serverSpeechProvider)
   }
-  cancelSpeechTransition()
-  store.stopTTS(false)
   if (store.speechConfig.provider === 'mimo') store.setMimoSpeechSource(source)
   else store.setOpenAISpeechSource(source)
+  ttsPanelDismissed.value = false
+  showTTSPanel.value = true
+  if (wasSpeaking) {
+    window.setTimeout(() => startSpeech(), 120)
+  }
+}
+
+function changeSpeechRequestMode(mode: OpenAISpeechRequestMode) {
+  if (store.speechConfig.provider === 'mimo' || (store.speechConfig.provider === 'server' && store.serverSpeechProvider === 'mimo')) {
+    store.setMimoSpeechRequestMode(mode)
+  } else {
+    store.setOpenAISpeechRequestMode(mode)
+  }
+  if (store.isSpeaking && !store.isPaused) {
+    restartSpeechFromCurrentParagraph()
+  }
 }
 
 function toggleSpeechFromPanel() {
@@ -1622,6 +1658,7 @@ watch(() => store.isAutoScrolling, (val) => {
 watch(showTTSPanel, (visible) => {
   if (visible) {
     void store.loadServerSpeechConfig()
+    void aiBookStore.loadServerModelConfig()
   }
 })
 
@@ -1655,7 +1692,7 @@ function changeMimoVoice(voiceId: string) {
 }
 
 function adjustSpeechRate(delta: number) {
-  const next = Math.max(0.25, Math.min(4, parseFloat((store.speechConfig.speechRate + delta).toFixed(1))))
+  const next = Math.max(0.5, Math.min(3, parseFloat((store.speechConfig.speechRate + delta).toFixed(1))))
   store.setSpeechRate(next)
   ttsPanelDismissed.value = false
   showTTSPanel.value = true

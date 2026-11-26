@@ -160,6 +160,8 @@ interface SpeechConfig {
   openaiModel: string
   openaiVoice: string
   openaiFormat: OpenAISpeechFormat
+  openaiUseProxy: boolean
+  openaiUseFullUrl: boolean
   openaiRequestMode: OpenAISpeechRequestMode
   mimoSource: OpenAISpeechSource
   mimoBaseUrl: string
@@ -168,6 +170,8 @@ interface SpeechConfig {
   mimoVoice: string
   mimoFormat: MimoSpeechFormat
   mimoPrompt: string
+  mimoUseProxy: boolean
+  mimoUseFullUrl: boolean
   mimoRequestMode: OpenAISpeechRequestMode
 }
 
@@ -180,9 +184,11 @@ const defaultSpeechConfig: SpeechConfig = {
   openaiSource: 'browser',
   openaiBaseUrl: DEFAULT_OPENAI_BASE_URL,
   openaiApiKey: '',
-  openaiModel: 'qwen-tts',
-  openaiVoice: 'vivian',
+  openaiModel: 'gpt-4o-mini-tts',
+  openaiVoice: 'alloy',
   openaiFormat: 'mp3',
+  openaiUseProxy: false,
+  openaiUseFullUrl: false,
   openaiRequestMode: 'chunked',
   mimoSource: 'browser',
   mimoBaseUrl: DEFAULT_MIMO_BASE_URL,
@@ -191,6 +197,8 @@ const defaultSpeechConfig: SpeechConfig = {
   mimoVoice: DEFAULT_MIMO_VOICE,
   mimoFormat: DEFAULT_MIMO_FORMAT,
   mimoPrompt: '',
+  mimoUseProxy: false,
+  mimoUseFullUrl: false,
   mimoRequestMode: 'chunked',
 }
 
@@ -580,6 +588,7 @@ export const useReaderStore = defineStore('reader', () => {
   let currentOpenAIAbortController: AbortController | null = null
   const preloadedOpenAIAudio = ref<PreloadedOpenAIAudio[]>([])
   let preloadGeneration = 0
+  let preloadAbortController: AbortController | null = null
   const inFlightPreloadKeys = new Set<string>()
   const inFlightOpenAIAudioRequests = new Map<string, Promise<Blob>>()
   let currentTTSSessionId = 0
@@ -742,9 +751,11 @@ export const useReaderStore = defineStore('reader', () => {
   // Saves the model/credential part of the speech config in one go (AI settings page).
   function applySpeechModelConfig(patch: Partial<Pick<SpeechConfig,
     'openaiSource' | 'openaiBaseUrl' | 'openaiApiKey' | 'openaiModel' | 'openaiVoice' | 'openaiFormat'
-    | 'mimoSource' | 'mimoBaseUrl' | 'mimoApiKey' | 'mimoModel' | 'mimoVoice' | 'mimoFormat' | 'mimoPrompt'>>) {
+    | 'openaiUseProxy' | 'openaiUseFullUrl'
+    | 'mimoSource' | 'mimoBaseUrl' | 'mimoApiKey' | 'mimoModel' | 'mimoVoice' | 'mimoFormat' | 'mimoPrompt'
+    | 'mimoUseProxy' | 'mimoUseFullUrl'>>) {
     const trimmed = { ...patch }
-    for (const key of ['openaiBaseUrl', 'openaiApiKey', 'openaiModel', 'openaiVoice', 'mimoBaseUrl', 'mimoApiKey', 'mimoPrompt'] as const) {
+    for (const key of ['openaiBaseUrl', 'openaiApiKey', 'openaiModel', 'openaiVoice', 'mimoBaseUrl', 'mimoApiKey', 'mimoVoice', 'mimoPrompt'] as const) {
       if (typeof trimmed[key] === 'string') trimmed[key] = trimmed[key]!.trim()
     }
     Object.assign(speechConfig, trimmed)
@@ -838,6 +849,8 @@ export const useReaderStore = defineStore('reader', () => {
       return [
         'mimo',
         speechConfig.mimoSource,
+        speechConfig.mimoUseProxy ? 'proxy' : 'direct',
+        speechConfig.mimoUseFullUrl ? 'full' : 'auto',
         speechConfig.mimoBaseUrl.trim(),
         speechConfig.mimoApiKey.trim(),
         speechConfig.mimoModel,
@@ -851,6 +864,8 @@ export const useReaderStore = defineStore('reader', () => {
     return [
       'openai',
       speechConfig.openaiSource,
+      speechConfig.openaiUseProxy ? 'proxy' : 'direct',
+      speechConfig.openaiUseFullUrl ? 'full' : 'auto',
       speechConfig.openaiBaseUrl.trim(),
       speechConfig.openaiApiKey.trim(),
       speechConfig.openaiModel,
@@ -894,8 +909,9 @@ export const useReaderStore = defineStore('reader', () => {
     }
     if (speechConfig.provider === 'mimo') {
       return requestMimoSpeechAudio({
-        source: speechConfig.mimoSource,
+        source: speechConfig.mimoUseProxy ? 'proxy' : speechConfig.mimoSource,
         baseUrl: speechConfig.mimoBaseUrl,
+        fullUrl: speechConfig.mimoUseFullUrl,
         apiKey: speechConfig.mimoApiKey || undefined,
         input: rawText.slice(0, 4096),
         model: speechConfig.mimoModel,
@@ -907,8 +923,9 @@ export const useReaderStore = defineStore('reader', () => {
       })
     }
     return requestOpenAISpeechAudio({
-      source: speechConfig.openaiSource,
+      source: speechConfig.openaiUseProxy ? 'proxy' : speechConfig.openaiSource,
       baseUrl: speechConfig.openaiBaseUrl,
+      fullUrl: speechConfig.openaiUseFullUrl,
       apiKey: speechConfig.openaiApiKey || undefined,
       input: rawText.slice(0, 4096),
       model: speechConfig.openaiModel,
@@ -937,6 +954,10 @@ export const useReaderStore = defineStore('reader', () => {
 
   function clearPreloadedOpenAIAudio() {
     preloadGeneration += 1
+    if (preloadAbortController) {
+      preloadAbortController.abort()
+      preloadAbortController = null
+    }
     inFlightPreloadKeys.clear()
     inFlightOpenAIAudioRequests.clear()
     preloadedOpenAIAudio.value = []
@@ -964,10 +985,14 @@ export const useReaderStore = defineStore('reader', () => {
     if (!pendingTexts.length) return
 
     const generation = preloadGeneration
+    if (!preloadAbortController || preloadAbortController.signal.aborted) {
+      preloadAbortController = new AbortController()
+    }
+    const preloadSignal = preloadAbortController.signal
     for (const text of pendingTexts.slice(0, OPENAI_AUDIO_PRELOAD_LIMIT)) {
       const key = buildOpenAIAudioCacheKey(text)
       inFlightPreloadKeys.add(key)
-      const { promise } = getOrStartOpenAIAudioRequest(text)
+      const { promise } = getOrStartOpenAIAudioRequest(text, preloadSignal)
       void promise
         .then((blob) => {
           if (generation !== preloadGeneration) return
@@ -1242,7 +1267,7 @@ export const useReaderStore = defineStore('reader', () => {
     const source = isServer ? 'server' : isMimo ? speechConfig.mimoSource : speechConfig.openaiSource
     if (source === 'server') {
       const serverConfig = await aiBookStore.loadServerModelConfig()
-      if (!serverConfig?.canUseServerModel) {
+      if (!serverConfig?.canUseServerModel && !serverConfig?.isAdmin) {
         const error = new Error('当前账号没有使用后端模型配置的权限')
         appStore.showToast(error.message, 'warning')
         options.onError?.(error)

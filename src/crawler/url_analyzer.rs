@@ -4,9 +4,17 @@ use crate::model::book_source::BookSource;
 use crate::parser::js::{eval_js, eval_js_url, with_js_lib};
 use crate::util::text::normalize_source_url;
 use encoding_rs::Encoding;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+
+static URL_JS_SEGMENTS_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)<js>(.*?)</js>|@js:([\w\W]*)").unwrap());
+static INLINE_JS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([\w\W]*?)\}\}").unwrap());
+static PAGE_CHOICES_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<(.*?)>").unwrap());
+static LEGACY_SEARCH_KEY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bsearchKey\b").unwrap());
+static LEGACY_SEARCH_PAGE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bsearchPage\b").unwrap());
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -28,9 +36,11 @@ pub fn analyze_url(
         let mut rule_url = m_url.to_string();
         let mut header_spec = source_header_spec(source)?;
 
+        let had_template_js =
+            URL_JS_SEGMENTS_RE.is_match(&rule_url) || INLINE_JS_RE.is_match(&rule_url);
         rule_url = eval_url_js_segments(&rule_url, key, page, &source.book_source_url, &base_url)?;
         rule_url = replace_inline_js(&rule_url, key, page, &source.book_source_url, &base_url)?;
-        rule_url = replace_legacy_placeholders(&rule_url, key, page);
+        rule_url = replace_legacy_placeholders(&rule_url, key, page, had_template_js);
         rule_url = replace_page_choices(&rule_url, page);
 
         let (url_part, options) = split_url_options(&rule_url);
@@ -302,14 +312,13 @@ fn eval_url_js_segments(
     source_key: &str,
     base_url: &str,
 ) -> Result<String, AppError> {
-    let re = Regex::new(r"(?is)<js>(.*?)</js>|@js:([\w\W]*)").unwrap();
-    if !re.is_match(rule) {
+    if !URL_JS_SEGMENTS_RE.is_match(rule) {
         return Ok(rule.to_string());
     }
 
     let mut result = rule.to_string();
     let mut start = 0usize;
-    for captures in re.captures_iter(rule) {
+    for captures in URL_JS_SEGMENTS_RE.captures_iter(rule) {
         let Some(matched) = captures.get(0) else {
             continue;
         };
@@ -347,10 +356,9 @@ fn replace_inline_js(
     source_key: &str,
     base_url: &str,
 ) -> Result<String, AppError> {
-    let re = Regex::new(r"\{\{([\w\W]*?)\}\}").unwrap();
     let mut output = String::with_capacity(rule.len());
     let mut last = 0usize;
-    for captures in re.captures_iter(rule) {
+    for captures in INLINE_JS_RE.captures_iter(rule) {
         let Some(matched) = captures.get(0) else {
             continue;
         };
@@ -365,35 +373,67 @@ fn replace_inline_js(
     Ok(output)
 }
 
-fn replace_legacy_placeholders(rule: &str, key: &str, page: i32) -> String {
-    rule.replace("{key}", key)
-        .replace("{page}", &page.to_string())
-        .replace("searchKey", key)
-        .replace("searchPage", &page.to_string())
+fn replace_legacy_placeholders(
+    rule: &str,
+    key: &str,
+    page: i32,
+    had_template_js: bool,
+) -> String {
+    let page_str = page.to_string();
+    let replaced = rule.replace("{key}", key).replace("{page}", &page_str);
+    if had_template_js {
+        return replaced;
+    }
+    let replaced = replace_legacy_token(&replaced, &LEGACY_SEARCH_KEY_RE, key);
+    replace_legacy_token(&replaced, &LEGACY_SEARCH_PAGE_RE, &page_str)
+}
+
+fn replace_legacy_token(input: &str, re: &Regex, replacement: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut last = 0usize;
+    for matched in re.find_iter(input) {
+        output.push_str(&input[last..matched.start()]);
+        let after = &input[matched.end()..];
+        let trimmed_after = after.trim_start();
+        let is_param_or_json_key = trimmed_after.starts_with('=')
+            || trimmed_after.starts_with(':')
+            || (trimmed_after.starts_with('"')
+                && trimmed_after[1..].trim_start().starts_with(':'))
+            || (trimmed_after.starts_with('\'')
+                && trimmed_after[1..].trim_start().starts_with(':'));
+        if is_param_or_json_key {
+            output.push_str(matched.as_str());
+        } else {
+            output.push_str(replacement);
+        }
+        last = matched.end();
+    }
+    output.push_str(&input[last..]);
+    output
 }
 
 fn replace_page_choices(rule: &str, page: i32) -> String {
-    let re = Regex::new(r"<(.*?)>").unwrap();
-    re.replace_all(rule, |captures: &regex::Captures| {
-        let pages = captures
-            .get(1)
-            .map(|m| m.as_str())
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .collect::<Vec<_>>();
-        if pages.is_empty() {
-            return String::new();
-        }
-        let idx = page.saturating_sub(1) as usize;
-        pages
-            .get(idx)
-            .or_else(|| pages.last())
-            .copied()
-            .unwrap_or_default()
-            .to_string()
-    })
-    .into_owned()
+    PAGE_CHOICES_RE
+        .replace_all(rule, |captures: &regex::Captures| {
+            let pages = captures
+                .get(1)
+                .map(|m| m.as_str())
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            if pages.is_empty() {
+                return String::new();
+            }
+            let idx = page.saturating_sub(1) as usize;
+            pages
+                .get(idx)
+                .or_else(|| pages.last())
+                .copied()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .into_owned()
 }
 
 fn split_url_options(rule: &str) -> (&str, Option<&str>) {
@@ -502,11 +542,12 @@ fn percent_encode_query_bytes(bytes: &[u8]) -> String {
 
 fn encode_post_body(body: &str, charset: Option<&str>, has_content_type: bool) -> String {
     let trimmed = body.trim_start();
+    let encode_with_declared_charset = uses_non_utf_charset(charset);
     if has_content_type
         || trimmed.starts_with('{')
         || trimmed.starts_with('[')
         || trimmed.starts_with('<')
-        || body.contains('%')
+        || (body.contains('%') && !encode_with_declared_charset)
     {
         return body.to_string();
     }
@@ -516,17 +557,17 @@ fn encode_post_body(body: &str, charset: Option<&str>, has_content_type: bool) -
     {
         return body
             .split('&')
-            .map(|part| encode_form_part(part, true))
+            .map(|part| encode_form_part(part, None, true))
             .collect::<Vec<_>>()
             .join("&");
     }
     body.split('&')
-        .map(|part| encode_form_part(part, false))
+        .map(|part| encode_form_part(part, charset, false))
         .collect::<Vec<_>>()
         .join("&")
 }
 
-fn encode_form_part(part: &str, escape: bool) -> String {
+fn encode_form_part(part: &str, charset: Option<&str>, escape: bool) -> String {
     let mut pieces = part.splitn(2, '=');
     let key = pieces.next().unwrap_or_default();
     let value = pieces.next();
@@ -534,7 +575,7 @@ fn encode_form_part(part: &str, escape: bool) -> String {
         if escape {
             escape_encode(input)
         } else {
-            urlencoding::encode(input).into_owned()
+            encode_query_component(input, charset)
         }
     };
     match value {
@@ -662,4 +703,63 @@ fn parse_header_token(chars: &[char], index: &mut usize, stop_at_colon: bool) ->
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::book_source::BookSource;
+
+    fn test_source() -> BookSource {
+        BookSource {
+            book_source_name: "Test".to_string(),
+            book_source_url: "https://example.test".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn preserves_search_key_param_name_when_template_used() {
+        let source = test_source();
+        let spec = analyze_url(
+            "/search?searchKey={{key}}&searchPage={{page}}",
+            "斗破苍穹",
+            2,
+            &source.book_source_url,
+            &source,
+        )
+        .unwrap();
+        assert!(spec.url.contains("searchKey="));
+        assert!(spec.url.contains("searchPage=2"));
+        assert!(!spec.url.contains("%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9="));
+    }
+
+    #[test]
+    fn replaces_legacy_search_key_value_without_clobbering_param_name() {
+        let source = test_source();
+        let spec = analyze_url(
+            "/search?searchKey=searchKey&page=searchPage",
+            "abc",
+            3,
+            &source.book_source_url,
+            &source,
+        )
+        .unwrap();
+        assert_eq!(spec.url, "https://example.test/search?searchKey=abc&page=3");
+    }
+
+    #[test]
+    fn encodes_gbk_post_body_with_declared_charset() {
+        let source = test_source();
+        let spec = analyze_url(
+            r#"/search.php,{"method":"POST","charset":"gbk","body":"searchkey={{key}}&page={{page}}"}"#,
+            "斗破",
+            1,
+            &source.book_source_url,
+            &source,
+        )
+        .unwrap();
+        assert_eq!(spec.method, HttpMethod::POST);
+        assert_eq!(spec.body.as_deref(), Some("searchkey=%B6%B7%C6%C6&page=1"));
+    }
 }

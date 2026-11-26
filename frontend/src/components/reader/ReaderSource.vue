@@ -51,7 +51,7 @@
       >
         <div class="source-main">
           <div class="source-name-row">
-            <span class="source-name">{{ item.book.origin }}</span>
+            <span class="source-name">{{ sourceLabel(item.book) }}</span>
             <span class="source-tag" v-if="item.book.kind">{{ item.book.kind }}</span>
             <span v-if="item.sameLatest" class="compare-badge good">最新章节一致</span>
             <span v-else-if="item.book.lastChapter" class="compare-badge">章节不同</span>
@@ -123,6 +123,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useReaderStore } from '../../stores/reader'
 import { useAppStore } from '../../stores/app'
+import { useSourceStore } from '../../stores/source'
 import { getAvailableBookSourceSSE } from '../../api/search'
 import { getBookInfo } from '../../api/bookshelf'
 import type { Book, SearchBook } from '../../types'
@@ -138,7 +139,13 @@ type CandidateItem = {
 
 const store = useReaderStore()
 const appStore = useAppStore()
+const sourceStore = useSourceStore()
 const theme = computed(() => store.currentTheme)
+const sourceNameByUrl = computed(() => new Map(sourceStore.sources.map((s) => [s.bookSourceUrl, s.bookSourceName])))
+
+function sourceLabel(book: SearchBook) {
+  return book.originName || sourceNameByUrl.value.get(book.origin) || book.origin
+}
 const searching = ref(false)
 const loadingMore = ref(false)
 const results = ref<SearchBook[]>([])

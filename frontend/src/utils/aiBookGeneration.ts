@@ -12,6 +12,7 @@ import type {
 } from '../types'
 import { isAiBookConfigReady, isAiBookImageConfigReady } from './aiBookConfig'
 import { summarizeHttpErrorBody } from './httpError'
+import { buildReaderAuthHeaders as readSharedAuthHeaders } from './secureAccess'
 
 export type AiBookChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -1255,12 +1256,7 @@ async function fetchImageBlob(imageUrl: string, fetchImpl: typeof fetch, useBack
 }
 
 function buildReaderAuthHeaders() {
-  const headers: Record<string, string> = {}
-  const token = safeLocalStorageGet('accessToken')
-  if (token) {
-    headers.Authorization = token
-  }
-  return headers
+  return readSharedAuthHeaders()
 }
 
 function safeLocalStorageGet(key: string) {

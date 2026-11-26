@@ -20,8 +20,35 @@
       </div>
 
       <template v-else>
+        <!-- Top-level scope tabs for admins so the page stays compact -->
+        <nav v-if="isAdmin" class="page-tabs" role="tablist" aria-label="配置范围">
+          <button
+            type="button"
+            role="tab"
+            class="page-tab"
+            :class="{ active: activeTab === 'personal' }"
+            :aria-selected="activeTab === 'personal'"
+            @click="activeTab = 'personal'"
+          >
+            我的配置
+            <span v-if="personalDirty" class="dirty-dot" title="有未保存修改"></span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            class="page-tab"
+            :class="{ active: activeTab === 'server' }"
+            :aria-selected="activeTab === 'server'"
+            @click="activeTab = 'server'"
+          >
+            后端全局配置
+            <span class="admin-tag">管理员</span>
+            <span v-if="serverDirty" class="dirty-dot" title="有未保存修改"></span>
+          </button>
+        </nav>
+
         <!-- Personal configuration: stored in this browser only -->
-        <section class="settings-section">
+        <section v-show="!isAdmin || activeTab === 'personal'" class="settings-section">
           <div class="section-head">
             <h2>我的配置</h2>
             <p>只保存在当前浏览器，换设备或清除浏览器数据后需要重新填写。</p>
@@ -96,6 +123,18 @@
                   <h4>文本模型</h4>
                   <span class="card-note">用于生成角色、关系、地点资料</span>
                 </div>
+                <div class="preset-row">
+                  <span class="preset-label">快捷预设</span>
+                  <button
+                    v-for="preset in TEXT_PRESETS"
+                    :key="preset.label"
+                    type="button"
+                    class="preset-chip"
+                    @click="applyTextPreset(personalAi, preset)"
+                  >
+                    {{ preset.label }}
+                  </button>
+                </div>
                 <div class="settings-grid">
                   <label class="field span-2">
                     <span>Base URL</span>
@@ -108,7 +147,7 @@
                   </label>
                   <label class="field">
                     <span>API Key</span>
-                    <input v-model="personalAi.textApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                    <ApiKeyInput v-model="personalAi.textApiKey" />
                   </label>
                 </div>
                 <div class="card-foot">
@@ -144,7 +183,7 @@
                   </label>
                   <label class="field span-2">
                     <span>API Key</span>
-                    <input v-model="personalAi.imageApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                    <ApiKeyInput v-model="personalAi.imageApiKey" />
                   </label>
                 </div>
                 <div class="card-foot">
@@ -177,8 +216,25 @@
 
           <h3 id="speech-settings" class="group-title">听书语音</h3>
           <p class="group-hint">
-            这里配置语音服务的地址和音色。朗读时用哪个引擎、语速和请求模式，在阅读页的「设置 → 朗读」里选择。
+            这里配置语音服务的地址、凭据和默认音色。朗读时的引擎切换、语速和定时停止可在阅读页听书面板直接调节。
           </p>
+
+          <!-- Unified server speech status summary -->
+          <article v-if="canUseServerModel" class="settings-card server-speech-banner">
+            <div class="settings-card-head">
+              <div>
+                <h4>服务器托管语音</h4>
+                <p class="summary-line">{{ serverSpeechSummary }}</p>
+              </div>
+              <span class="status-tag" :class="{ active: serverReady.speech }">
+                {{ serverReady.speech ? '可用' : '管理员未配置' }}
+              </span>
+            </div>
+            <div v-if="serverReady.speech" class="card-foot end">
+              <ModelTestButton :runner="testServerSpeech" label="试听后端语音" />
+            </div>
+          </article>
+
           <div class="settings-cards">
             <article v-for="engine in SPEECH_ENGINES" :key="engine.key" class="settings-card">
               <div class="settings-card-head">
@@ -209,7 +265,10 @@
 
               <template v-if="speechSource(engine.key) === 'server'">
                 <p class="settings-hint">
-                  朗读时使用管理员配置的语音服务（当前：{{ serverSpeechSummary }}）。
+                  朗读时将自动使用管理员配置的语音服务（当前：{{ serverSpeechSummary }}）。
+                  <template v-if="serverReady.speech && serverSpeechEngine !== engine.key">
+                    注意：后端当前配置的是「{{ serverSpeechEngine === 'mimo' ? '小米 MiMo' : 'OpenAI Speech' }}」。
+                  </template>
                 </p>
                 <div v-if="serverReady.speech" class="card-foot end">
                   <ModelTestButton :runner="testServerSpeech" label="试听" />
@@ -221,11 +280,11 @@
                   <label class="field span-2">
                     <span>服务地址</span>
                     <input v-model="personalSpeech.openaiBaseUrl" type="url" placeholder="https://api.openai.com" />
-                    <small class="field-note">{{ requestUrlNote(personalSpeech.openaiBaseUrl, false, '/v1/audio/speech') }}</small>
+                    <small class="field-note">{{ requestUrlNote(personalSpeech.openaiBaseUrl, personalSpeech.openaiUseFullUrl, '/v1/audio/speech') }}</small>
                   </label>
                   <label class="field span-2">
                     <span>API Key</span>
-                    <input v-model="personalSpeech.openaiApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                    <ApiKeyInput v-model="personalSpeech.openaiApiKey" />
                   </label>
                   <label class="field">
                     <span>模型</span>
@@ -233,13 +292,25 @@
                   </label>
                   <label class="field">
                     <span>音色</span>
-                    <input v-model="personalSpeech.openaiVoice" placeholder="alloy" />
+                    <input v-model="personalSpeech.openaiVoice" list="openai-voice-presets" placeholder="alloy" />
                   </label>
                   <label class="field">
                     <span>音频格式</span>
                     <select v-model="personalSpeech.openaiFormat">
                       <option v-for="format in OPENAI_FORMATS" :key="format" :value="format">{{ format }}</option>
                     </select>
+                  </label>
+                </div>
+                <div class="switch-stack">
+                  <label class="switch-line compact" title="开启后由阅读服务器代为转发，避免浏览器跨域限制">
+                    <input v-model="personalSpeech.openaiUseProxy" type="checkbox" />
+                    <span class="switch-ui"></span>
+                    <span>通过阅读服务器转发请求</span>
+                  </label>
+                  <label class="switch-line compact" title="开启后按服务地址原样请求，不再自动拼接 /v1/audio/speech">
+                    <input v-model="personalSpeech.openaiUseFullUrl" type="checkbox" />
+                    <span class="switch-ui"></span>
+                    <span>Base URL 是完整接口地址</span>
                   </label>
                 </div>
                 <div class="card-foot end">
@@ -256,7 +327,7 @@
                   </label>
                   <label class="field span-2">
                     <span>API Key</span>
-                    <input v-model="personalSpeech.mimoApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                    <ApiKeyInput v-model="personalSpeech.mimoApiKey" />
                   </label>
                   <label class="field">
                     <span>模型</span>
@@ -266,7 +337,13 @@
                   </label>
                   <label v-if="!personalSpeech.mimoModel.includes('voicedesign')" class="field">
                     <span>音色</span>
-                    <select v-model="personalSpeech.mimoVoice">
+                    <input
+                      v-if="personalSpeech.mimoModel.includes('voiceclone')"
+                      v-model="personalSpeech.mimoVoice"
+                      list="mimo-voice-presets"
+                      placeholder="输入克隆音色 ID"
+                    />
+                    <select v-else v-model="personalSpeech.mimoVoice">
                       <option v-for="voice in MIMO_PRESET_VOICES" :key="voice.value" :value="voice.value">{{ voice.label }}</option>
                     </select>
                   </label>
@@ -279,8 +356,23 @@
                   </label>
                   <label class="field span-2">
                     <span>语气描述</span>
-                    <input v-model="personalSpeech.mimoPrompt" placeholder="例如：温柔坚定、稍慢、带点疲惫" />
-                    <small class="field-note">MiMo 根据这段描述调整语气；朗读语速也会自动加进描述里。</small>
+                    <input v-model="personalSpeech.mimoPrompt" placeholder="例如：温柔坚定、带点叙事感" />
+                    <small v-if="hasSpeedKeyword(personalSpeech.mimoPrompt)" class="field-note warning">
+                      提示：语气描述已包含“慢/快/语速”关键词，朗读面板调节语速时不会覆盖这里的描述。
+                    </small>
+                    <small v-else class="field-note">MiMo 根据这段描述调整语气；朗读语速也会自动加进描述里。</small>
+                  </label>
+                </div>
+                <div class="switch-stack">
+                  <label class="switch-line compact" title="开启后直接由阅读服务器转发，避免浏览器跨域失败">
+                    <input v-model="personalSpeech.mimoUseProxy" type="checkbox" />
+                    <span class="switch-ui"></span>
+                    <span>通过阅读服务器转发请求</span>
+                  </label>
+                  <label class="switch-line compact" title="开启后按服务地址原样请求，不再自动拼接 /v1/chat/completions">
+                    <input v-model="personalSpeech.mimoUseFullUrl" type="checkbox" />
+                    <span class="switch-ui"></span>
+                    <span>Base URL 是完整接口地址</span>
                   </label>
                 </div>
                 <div class="card-foot end">
@@ -292,7 +384,7 @@
         </section>
 
         <!-- Server configuration: admins only -->
-        <section v-if="isAdmin" class="settings-section">
+        <section v-if="isAdmin" v-show="activeTab === 'server'" class="settings-section">
           <div class="section-head">
             <h2>后端模型配置 <span class="admin-tag">管理员</span></h2>
             <p>保存在服务器上。开启了「AI 模型」权限的账号选择「使用后端配置」时会用到，API Key 不会发给普通用户。</p>
@@ -308,6 +400,18 @@
                   <span>启用</span>
                 </label>
               </div>
+              <div class="preset-row">
+                <span class="preset-label">快捷预设</span>
+                <button
+                  v-for="preset in TEXT_PRESETS"
+                  :key="preset.label"
+                  type="button"
+                  class="preset-chip"
+                  @click="applyServerTextPreset(preset)"
+                >
+                  {{ preset.label }}
+                </button>
+              </div>
               <div class="settings-grid" :class="{ muted: !serverDraft.text.enabled }">
                 <label class="field span-2">
                   <span>Base URL</span>
@@ -320,7 +424,7 @@
                 </label>
                 <label class="field">
                   <span>API Key</span>
-                  <input v-model="serverDraft.text.apiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                  <ApiKeyInput v-model="serverDraft.text.apiKey" />
                 </label>
               </div>
               <div class="card-foot">
@@ -360,7 +464,7 @@
                 </label>
                 <label class="field span-2">
                   <span>API Key</span>
-                  <input v-model="serverDraft.image.apiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                  <ApiKeyInput v-model="serverDraft.image.apiKey" />
                 </label>
               </div>
               <div class="card-foot">
@@ -406,12 +510,18 @@
                   </select>
                   <input v-else v-model="serverDraft.speech.model" placeholder="gpt-4o-mini-tts" />
                 </label>
-                <label class="field">
+                <label v-if="!(serverDraft.speech.provider === 'mimo' && serverDraft.speech.model.includes('voicedesign'))" class="field">
                   <span>音色</span>
-                  <select v-if="serverDraft.speech.provider === 'mimo'" v-model="serverDraft.speech.voice">
+                  <input
+                    v-if="serverDraft.speech.provider === 'mimo' && serverDraft.speech.model.includes('voiceclone')"
+                    v-model="serverDraft.speech.voice"
+                    list="mimo-voice-presets"
+                    placeholder="输入克隆音色 ID"
+                  />
+                  <select v-else-if="serverDraft.speech.provider === 'mimo'" v-model="serverDraft.speech.voice">
                     <option v-for="voice in MIMO_PRESET_VOICES" :key="voice.value" :value="voice.value">{{ voice.label }}</option>
                   </select>
-                  <input v-else v-model="serverDraft.speech.voice" placeholder="alloy" />
+                  <input v-else v-model="serverDraft.speech.voice" list="openai-voice-presets" placeholder="alloy" />
                 </label>
                 <label class="field">
                   <span>音频格式</span>
@@ -421,11 +531,11 @@
                 </label>
                 <label class="field span-2">
                   <span>API Key</span>
-                  <input v-model="serverDraft.speech.apiKey" type="password" autocomplete="off" placeholder="sk-..." />
+                  <ApiKeyInput v-model="serverDraft.speech.apiKey" />
                 </label>
                 <label v-if="serverDraft.speech.provider === 'mimo'" class="field">
                   <span>语气描述</span>
-                  <input v-model="serverDraft.speech.prompt" placeholder="例如：温柔坚定、稍慢" />
+                  <input v-model="serverDraft.speech.prompt" placeholder="例如：温柔坚定、带点叙事感" />
                 </label>
               </div>
               <div class="card-foot">
@@ -438,14 +548,33 @@
               </div>
             </article>
           </div>
-          <p class="settings-hint">测试使用当前填写的内容，不需要先保存。</p>
+          <p class="settings-hint">测试使用当前填写的内容，不需要先保存。快捷键 Ctrl/Cmd + S 可快速保存。</p>
         </section>
       </template>
     </div>
 
+    <datalist id="openai-voice-presets">
+      <option value="alloy" />
+      <option value="ash" />
+      <option value="ballad" />
+      <option value="coral" />
+      <option value="echo" />
+      <option value="fable" />
+      <option value="nova" />
+      <option value="onyx" />
+      <option value="sage" />
+      <option value="shimmer" />
+    </datalist>
+
+    <datalist id="mimo-voice-presets">
+      <option v-for="voice in MIMO_PRESET_VOICES" :key="voice.value" :value="voice.value">
+        {{ voice.label }}
+      </option>
+    </datalist>
+
     <Transition name="save-bar">
       <div v-if="!loading && (personalDirty || serverDirty)" class="save-bar" role="region" aria-label="未保存的修改">
-        <span class="save-bar-text">有未保存的修改</span>
+        <span class="save-bar-text">{{ saveBarSummary }}</span>
         <div class="save-bar-actions">
           <button class="secondary-btn" type="button" @click="discardChanges">撤销修改</button>
           <button v-if="personalDirty" class="primary-btn" type="button" @click="savePersonal">保存我的配置</button>
@@ -461,6 +590,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import ApiKeyInput from '../components/ai/ApiKeyInput.vue'
 import ModelTestButton from '../components/ai/ModelTestButton.vue'
 import { saveAiModelConfig } from '../api/aiModel'
 import { useAiBookStore } from '../stores/aiBook'
@@ -483,6 +613,8 @@ interface SpeechDraft {
   openaiModel: string
   openaiVoice: string
   openaiFormat: OpenAISpeechFormat
+  openaiUseProxy: boolean
+  openaiUseFullUrl: boolean
   mimoSource: OpenAISpeechSource
   mimoBaseUrl: string
   mimoApiKey: string
@@ -490,9 +622,18 @@ interface SpeechDraft {
   mimoVoice: string
   mimoFormat: MimoSpeechFormat
   mimoPrompt: string
+  mimoUseProxy: boolean
+  mimoUseFullUrl: boolean
 }
 
 type SpeechEngine = 'openai' | 'mimo'
+
+const TEXT_PRESETS = [
+  { label: 'OpenAI', baseUrl: 'https://api.openai.com', model: 'gpt-4o-mini' },
+  { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  { label: '硅基流动', baseUrl: 'https://api.siliconflow.cn', model: 'Qwen/Qwen2.5-72B-Instruct' },
+  { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api', model: 'openai/gpt-4o-mini' },
+]
 
 const IMAGE_SIZES = ['1024x1024', '1792x1024', '1024x1792']
 const OPENAI_FORMATS: OpenAISpeechFormat[] = ['mp3', 'wav', 'opus', 'flac', 'pcm']
@@ -511,6 +652,7 @@ const readerStore = useReaderStore()
 
 const loading = ref(true)
 const savingServer = ref(false)
+const activeTab = ref<'personal' | 'server'>('personal')
 const personalAi = reactive<AiBookConfig>({ ...aiStore.config })
 const personalSpeech = reactive<SpeechDraft>(pickSpeechDraft())
 const serverDraft = reactive<AiServerModelConfig>(createEmptyServerConfig())
@@ -535,8 +677,15 @@ const serverSpeechSummary = computed(() => {
 
 const personalDirty = computed(() => personalSnapshot.value !== snapshotPersonal())
 const serverDirty = computed(() => isAdmin.value && serverSnapshot.value !== JSON.stringify(serverDraft))
+const saveBarSummary = computed(() => {
+  if (personalDirty.value && serverDirty.value) return '「我的配置」与「后端配置」均有未保存修改'
+  if (serverDirty.value) return '「后端配置」有未保存的修改'
+  return '「我的配置」有未保存的修改'
+})
 
-const mimoRequestUrl = computed(() => buildMimoChatUrl(personalSpeech.mimoBaseUrl || DEFAULT_MIMO_BASE_URL))
+const mimoRequestUrl = computed(() =>
+  buildMimoChatUrl(personalSpeech.mimoBaseUrl || DEFAULT_MIMO_BASE_URL, personalSpeech.mimoUseFullUrl),
+)
 const serverSpeechFormats = computed(() => serverDraft.speech.provider === 'mimo'
   ? ['wav', 'mp3']
   : OPENAI_FORMATS)
@@ -549,20 +698,25 @@ const serverSpeechUrlNote = computed(() => {
 // Keys that clear a stale test result when the related fields change.
 const personalTextKey = computed(() => JSON.stringify([personalAi.textBaseUrl, personalAi.textApiKey, personalAi.textModel, personalAi.textUseFullUrl, personalAi.useBackendProxy]))
 const personalImageKey = computed(() => JSON.stringify([personalAi.imageBaseUrl, personalAi.imageApiKey, personalAi.imageModel, personalAi.imageSize, personalAi.imageUseFullUrl, personalAi.useBackendProxy]))
-const personalOpenAIKey = computed(() => JSON.stringify([personalSpeech.openaiBaseUrl, personalSpeech.openaiApiKey, personalSpeech.openaiModel, personalSpeech.openaiVoice, personalSpeech.openaiFormat]))
-const personalMimoKey = computed(() => JSON.stringify([personalSpeech.mimoBaseUrl, personalSpeech.mimoApiKey, personalSpeech.mimoModel, personalSpeech.mimoVoice, personalSpeech.mimoFormat, personalSpeech.mimoPrompt]))
+const personalOpenAIKey = computed(() => JSON.stringify([personalSpeech.openaiBaseUrl, personalSpeech.openaiApiKey, personalSpeech.openaiModel, personalSpeech.openaiVoice, personalSpeech.openaiFormat, personalSpeech.openaiUseProxy, personalSpeech.openaiUseFullUrl]))
+const personalMimoKey = computed(() => JSON.stringify([personalSpeech.mimoBaseUrl, personalSpeech.mimoApiKey, personalSpeech.mimoModel, personalSpeech.mimoVoice, personalSpeech.mimoFormat, personalSpeech.mimoPrompt, personalSpeech.mimoUseProxy, personalSpeech.mimoUseFullUrl]))
 const serverTextKey = computed(() => JSON.stringify(serverDraft.text))
 const serverImageKey = computed(() => JSON.stringify(serverDraft.image))
 const serverSpeechKey = computed(() => JSON.stringify(serverDraft.speech))
 
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('keydown', handleKeydown)
   await appStore.fetchUserInfo()
   await aiStore.loadServerModelConfig({ force: true })
   resetPersonalDraft()
   resetServerDraft()
+  if (route.query.tab === 'server' && isAdmin.value) {
+    activeTab.value = 'server'
+  }
   loading.value = false
   if (route.query.section === 'speech') {
+    activeTab.value = 'personal'
     await nextTick()
     document.getElementById('speech-settings')?.scrollIntoView({ block: 'start' })
   }
@@ -570,6 +724,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('keydown', handleKeydown)
 })
 
 onBeforeRouteLeave(() => {
@@ -583,12 +738,43 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
   event.returnValue = ''
 }
 
+function handleKeydown(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+    if (!personalDirty.value && !serverDirty.value) return
+    event.preventDefault()
+    if (activeTab.value === 'server' && serverDirty.value) {
+      void saveServer()
+    } else if (personalDirty.value) {
+      savePersonal()
+    } else if (serverDirty.value) {
+      void saveServer()
+    }
+  }
+}
+
 function goBack() {
   if (window.history.state?.back) {
     router.back()
   } else {
     router.push('/')
   }
+}
+
+function hasSpeedKeyword(prompt?: string) {
+  const value = (prompt || '').trim()
+  return Boolean(value && (value.includes('慢') || value.includes('快') || value.includes('语速')))
+}
+
+function applyTextPreset(target: AiBookConfig, preset: { baseUrl: string; model: string }) {
+  target.textBaseUrl = preset.baseUrl
+  target.textModel = preset.model
+  target.textUseFullUrl = false
+}
+
+function applyServerTextPreset(preset: { baseUrl: string; model: string }) {
+  serverDraft.text.baseUrl = preset.baseUrl
+  serverDraft.text.model = preset.model
+  serverDraft.text.useFullUrl = false
 }
 
 function pickSpeechDraft(): SpeechDraft {
@@ -600,6 +786,8 @@ function pickSpeechDraft(): SpeechDraft {
     openaiModel: c.openaiModel,
     openaiVoice: c.openaiVoice,
     openaiFormat: c.openaiFormat,
+    openaiUseProxy: Boolean(c.openaiUseProxy),
+    openaiUseFullUrl: Boolean(c.openaiUseFullUrl),
     mimoSource: c.mimoSource,
     mimoBaseUrl: c.mimoBaseUrl,
     mimoApiKey: c.mimoApiKey,
@@ -607,6 +795,8 @@ function pickSpeechDraft(): SpeechDraft {
     mimoVoice: c.mimoVoice,
     mimoFormat: c.mimoFormat,
     mimoPrompt: c.mimoPrompt,
+    mimoUseProxy: Boolean(c.mimoUseProxy),
+    mimoUseFullUrl: Boolean(c.mimoUseFullUrl),
   }
 }
 
@@ -638,7 +828,55 @@ function discardChanges() {
   resetServerDraft()
 }
 
+function validateUrlIfPresent(label: string, url: string) {
+  const trimmed = url.trim()
+  if (!trimmed) return null
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `${label} 需要以 http:// 或 https:// 开头`
+  }
+  return null
+}
+
+function validatePersonalDraft(): string | null {
+  if (personalAi.modelSource === 'browser') {
+    const err = validateUrlIfPresent('文本模型 Base URL', personalAi.textBaseUrl)
+      || validateUrlIfPresent('图片模型 Base URL', personalAi.imageBaseUrl)
+    if (err) return err
+  }
+  if (personalSpeech.openaiSource === 'browser') {
+    const err = validateUrlIfPresent('OpenAI Speech 服务地址', personalSpeech.openaiBaseUrl)
+    if (err) return err
+  }
+  if (personalSpeech.mimoSource === 'browser') {
+    const err = validateUrlIfPresent('小米 MiMo 服务地址', personalSpeech.mimoBaseUrl)
+    if (err) return err
+  }
+  return null
+}
+
+function validateServerDraft(): string | null {
+  const checks: Array<[string, { enabled: boolean; baseUrl: string; model: string }]> = [
+    ['后端文本模型', serverDraft.text],
+    ['后端图片模型', serverDraft.image],
+    ['后端语音合成', serverDraft.speech],
+  ]
+  for (const [label, section] of checks) {
+    const urlErr = validateUrlIfPresent(`${label} Base URL`, section.baseUrl)
+    if (urlErr) return urlErr
+    if (section.enabled) {
+      if (!section.baseUrl.trim()) return `${label}已启用，请填写 Base URL`
+      if (!section.model.trim()) return `${label}已启用，请填写模型名称`
+    }
+  }
+  return null
+}
+
 function savePersonal() {
+  const error = validatePersonalDraft()
+  if (error) {
+    appStore.showToast(error, 'warning')
+    return
+  }
   aiStore.persistConfig({ ...personalAi })
   readerStore.applySpeechModelConfig({ ...personalSpeech })
   resetPersonalDraft()
@@ -647,14 +885,19 @@ function savePersonal() {
 
 async function saveServer() {
   if (!isAdmin.value) return
+  const error = validateServerDraft()
+  if (error) {
+    appStore.showToast(error, 'warning')
+    return
+  }
   savingServer.value = true
   try {
     const saved = await saveAiModelConfig(cloneServerConfig(serverDraft))
     aiStore.serverModelConfig = saved
     resetServerDraft()
     appStore.showToast('后端模型配置已保存', 'success')
-  } catch (error) {
-    appStore.showToast((error as Error).message || '后端模型配置保存失败', 'error')
+  } catch (err) {
+    appStore.showToast((err as Error).message || '后端模型配置保存失败', 'error')
   } finally {
     savingServer.value = false
   }
@@ -680,51 +923,51 @@ function personalRoute() {
   return personalAi.useBackendProxy ? 'proxy' as const : 'direct' as const
 }
 
-function testPersonalText() {
+function testPersonalText(signal?: AbortSignal) {
   return testTextModel(personalRoute(), {
     baseUrl: personalAi.textBaseUrl,
     apiKey: personalAi.textApiKey,
     model: personalAi.textModel,
     fullUrl: personalAi.textUseFullUrl,
-  })
+  }, signal)
 }
 
-function testPersonalImage() {
+function testPersonalImage(signal?: AbortSignal) {
   return testImageModel(personalRoute(), {
     baseUrl: personalAi.imageBaseUrl,
     apiKey: personalAi.imageApiKey,
     model: personalAi.imageModel,
     fullUrl: personalAi.imageUseFullUrl,
     size: personalAi.imageSize,
-  })
+  }, signal)
 }
 
-function testServerText() {
-  return testTextModel('server', EMPTY_ENDPOINT)
+function testServerText(signal?: AbortSignal) {
+  return testTextModel('server', EMPTY_ENDPOINT, signal)
 }
 
-function testServerImage() {
-  return testImageModel('server', { ...EMPTY_ENDPOINT, size: serverConfig.value?.image.imageSize || '1024x1024' })
+function testServerImage(signal?: AbortSignal) {
+  return testImageModel('server', { ...EMPTY_ENDPOINT, size: serverConfig.value?.image.imageSize || '1024x1024' }, signal)
 }
 
-function testServerSpeech() {
-  return testSpeechModel('server', { ...EMPTY_ENDPOINT, engine: serverSpeechEngine.value, voice: '', format: '' })
+function testServerSpeech(signal?: AbortSignal) {
+  return testSpeechModel('server', { ...EMPTY_ENDPOINT, engine: serverSpeechEngine.value, voice: '', format: '' }, signal)
 }
 
-function testPersonalOpenAISpeech() {
-  return testSpeechModel('direct', {
+function testPersonalOpenAISpeech(signal?: AbortSignal) {
+  return testSpeechModel(personalSpeech.openaiUseProxy ? 'proxy' : 'direct', {
     engine: 'openai',
     baseUrl: personalSpeech.openaiBaseUrl,
     apiKey: personalSpeech.openaiApiKey,
     model: personalSpeech.openaiModel,
     voice: personalSpeech.openaiVoice,
     format: personalSpeech.openaiFormat,
-    fullUrl: false,
-  })
+    fullUrl: personalSpeech.openaiUseFullUrl,
+  }, signal)
 }
 
-function testPersonalMimoSpeech() {
-  return testSpeechModel('direct', {
+function testPersonalMimoSpeech(signal?: AbortSignal) {
+  return testSpeechModel(personalSpeech.mimoUseProxy ? 'proxy' : 'direct', {
     engine: 'mimo',
     baseUrl: personalSpeech.mimoBaseUrl || DEFAULT_MIMO_BASE_URL,
     apiKey: personalSpeech.mimoApiKey,
@@ -732,22 +975,22 @@ function testPersonalMimoSpeech() {
     voice: personalSpeech.mimoVoice,
     format: personalSpeech.mimoFormat,
     prompt: personalSpeech.mimoPrompt,
-    fullUrl: false,
-  })
+    fullUrl: personalSpeech.mimoUseFullUrl,
+  }, signal)
 }
 
 // Admin tests run the unsaved draft through the reader server.
-function testDraftText() {
+function testDraftText(signal?: AbortSignal) {
   const { baseUrl, apiKey, model, useFullUrl } = serverDraft.text
-  return testTextModel('proxy', { baseUrl, apiKey, model, fullUrl: useFullUrl })
+  return testTextModel('proxy', { baseUrl, apiKey, model, fullUrl: useFullUrl }, signal)
 }
 
-function testDraftImage() {
+function testDraftImage(signal?: AbortSignal) {
   const { baseUrl, apiKey, model, useFullUrl, imageSize } = serverDraft.image
-  return testImageModel('proxy', { baseUrl, apiKey, model, fullUrl: useFullUrl, size: imageSize })
+  return testImageModel('proxy', { baseUrl, apiKey, model, fullUrl: useFullUrl, size: imageSize }, signal)
 }
 
-function testDraftSpeech() {
+function testDraftSpeech(signal?: AbortSignal) {
   const speech = serverDraft.speech
   return testSpeechModel('proxy', {
     engine: speech.provider === 'mimo' ? 'mimo' : 'openai',
@@ -758,7 +1001,7 @@ function testDraftSpeech() {
     format: speech.responseFormat,
     prompt: speech.prompt,
     fullUrl: speech.useFullUrl,
-  })
+  }, signal)
 }
 
 /* ─── Server config helpers ─── */
@@ -815,7 +1058,7 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
   padding: 16px 28px 32px;
   box-sizing: border-box;
   display: grid;
-  gap: 22px;
+  gap: 20px;
 }
 
 .page-header {
@@ -839,6 +1082,44 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
   line-height: 1.6;
 }
 
+.page-tabs {
+  display: inline-flex;
+  justify-self: start;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--color-bg-sunken);
+  border: 1px solid var(--color-border-light);
+}
+
+.page-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.page-tab.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+
 .page-loading {
   display: flex;
   align-items: center;
@@ -851,11 +1132,6 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
 .settings-section {
   display: grid;
   gap: 14px;
-}
-
-.settings-section + .settings-section {
-  padding-top: 22px;
-  border-top: 1px solid var(--color-border-light);
 }
 
 .section-head h2 {
@@ -883,7 +1159,7 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
   border-radius: 999px;
   background: var(--color-primary-bg, rgba(212, 129, 42, 0.12));
   color: var(--color-primary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -892,6 +1168,47 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
   font-size: 15px;
   color: var(--color-text-secondary);
   scroll-margin-top: 16px;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.preset-label {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  margin-right: 2px;
+}
+
+.preset-chip {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-light);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.preset-chip:hover {
+  border-color: var(--color-primary-border, var(--color-primary));
+  color: var(--color-primary);
+}
+
+.server-speech-banner {
+  background: linear-gradient(135deg, rgba(201, 127, 58, 0.06), transparent 60%), var(--color-bg-elevated);
+}
+
+.switch-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
 }
 
 .back-btn,
@@ -984,7 +1301,7 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
 }
 
 .summary-line {
-  margin: 0;
+  margin: 4px 0 0;
   color: var(--color-text-secondary);
   font-size: 13px;
   word-break: break-all;
@@ -1082,6 +1399,10 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
   font-size: 12px;
   font-weight: 400;
   word-break: break-all;
+}
+
+.field-note.warning {
+  color: var(--color-warning, #c97f3a);
 }
 
 .card-foot {
@@ -1207,6 +1528,16 @@ function cloneServerConfig(config: AiServerModelConfig): AiServerModelConfig {
   .page-header {
     flex-direction: column;
     gap: 10px;
+  }
+
+  .page-tabs {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-tab {
+    justify-content: center;
   }
 
   .page-title h1 {

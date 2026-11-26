@@ -132,6 +132,7 @@ import {
   readSourceFile,
 } from '../api/source'
 import { useAppStore } from '../stores/app'
+import { useSourceStore } from '../stores/source'
 import type { BookSource } from '../types'
 import {
   filterBookSources,
@@ -164,6 +165,7 @@ const emit = defineEmits<{
 }>()
 
 const appStore = useAppStore()
+const sourceStore = useSourceStore()
 
 const sources = ref<BookSource[]>([])
 const loading = ref(false)
@@ -238,10 +240,15 @@ function persistSubscriptions() {
   localStorage.setItem(SUBSCRIPTION_KEY, JSON.stringify(subscriptions.value))
 }
 
+function syncSourceStore() {
+  sourceStore.sources = [...sources.value]
+}
+
 async function loadSources() {
   loading.value = true
   try {
     sources.value = await getBookSources()
+    syncSourceStore()
     pruneSelection()
   } catch (e: unknown) {
     appStore.showToast((e as Error).message, 'error')
@@ -255,6 +262,7 @@ async function toggleSource(source: BookSource) {
   try {
     await saveBookSource(next)
     Object.assign(source, next)
+    syncSourceStore()
     appStore.showToast('书源状态已更新', 'success')
   } catch (e: unknown) {
     appStore.showToast((e as Error).message, 'error')
@@ -266,6 +274,7 @@ async function removeSource(source: BookSource) {
   try {
     await deleteBookSource(source.bookSourceUrl)
     sources.value = sources.value.filter((s) => s.bookSourceUrl !== source.bookSourceUrl)
+    syncSourceStore()
     selectedSourceUrls.value.delete(source.bookSourceUrl)
     if (editingSource.value?.bookSourceUrl === source.bookSourceUrl) {
       createSource()
@@ -287,6 +296,7 @@ async function removeSelectedSources() {
     await deleteBookSources(toBookSourceDeletePayload(targets))
     const targetUrls = new Set(targets.map((source) => source.bookSourceUrl))
     sources.value = sources.value.filter((source) => !targetUrls.has(source.bookSourceUrl))
+    syncSourceStore()
     selectedSourceUrls.value.clear()
     if (editingSource.value && targetUrls.has(editingSource.value.bookSourceUrl)) {
       createSource()
@@ -345,6 +355,7 @@ async function removeInvalidSources() {
     const result = await deleteInvalidBookSources()
     const invalidUrls = new Set(invalidSources.value.map((source) => source.bookSourceUrl))
     sources.value = sources.value.filter((source) => !invalidUrls.has(source.bookSourceUrl))
+    syncSourceStore()
     selectedSourceUrls.value.clear()
     if (editingSource.value && invalidUrls.has(editingSource.value.bookSourceUrl)) {
       createSource()

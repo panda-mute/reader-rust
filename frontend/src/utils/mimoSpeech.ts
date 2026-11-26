@@ -1,4 +1,5 @@
 import { summarizeHttpErrorBody } from './httpError'
+import { buildReaderAuthHeaders } from './secureAccess'
 
 export const DEFAULT_MIMO_BASE_URL = 'https://api.xiaomimimo.com'
 export const DEFAULT_MIMO_MODEL = 'mimo-v2.5-tts'
@@ -43,8 +44,9 @@ export function normalizeMimoBaseUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
 }
 
-export function buildMimoChatUrl(baseUrl: string) {
+export function buildMimoChatUrl(baseUrl: string, fullUrl = false) {
   const normalized = normalizeMimoBaseUrl(baseUrl)
+  if (!normalized || fullUrl) return normalized
   if (normalized.endsWith('/v1/chat/completions')) {
     return normalized
   }
@@ -145,17 +147,6 @@ function buildAuthHeaders(apiKey?: string) {
   return headers
 }
 
-function buildReaderAuthHeaders() {
-  const headers: Record<string, string> = {}
-  try {
-    const token = localStorage.getItem('accessToken') || ''
-    if (token) headers.Authorization = token
-  } catch {
-    // ignore storage access failures
-  }
-  return headers
-}
-
 async function readMimoError(response: Response) {
   const fallback = `小米 MiMo 语音请求失败 (${response.status})`
   const contentType = response.headers.get('content-type') || ''
@@ -235,7 +226,7 @@ export async function requestMimoSpeechAudio({
       signal,
     })
   } else {
-    const chatUrl = buildMimoChatUrl(baseUrl || DEFAULT_MIMO_BASE_URL)
+    const chatUrl = buildMimoChatUrl(baseUrl || DEFAULT_MIMO_BASE_URL, fullUrl)
     const directHeaders = {
       'Content-Type': 'application/json',
       ...buildAuthHeaders(apiKey),
@@ -261,6 +252,7 @@ export async function requestMimoSpeechAudio({
             baseUrl: normalizeMimoBaseUrl(baseUrl || DEFAULT_MIMO_BASE_URL),
             apiKey: apiKey?.trim() || undefined,
             path: '/v1/chat/completions',
+            fullUrl,
             body,
           }),
           signal,
